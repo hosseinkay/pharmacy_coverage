@@ -1,0 +1,17 @@
+{
+  "radius_status": "Fixed radius",
+  "coverage_status": "Coverage weighted by land area (assumes population is spread evenly across residential+commercial land)",
+  "num_selected": 10,
+  "num_requested": 10,
+  "num_candidates_evaluated": 7283,
+  "tracts_improved": 46,
+  "impact_label": "Communities impacted",
+  "impact_count": 9,
+  "newly_covered_population": 79591.16447701145,
+  "high_need_newly_covered_population": 64638.410046002675,
+  "avg_coverage_before_pct": 61.441702822487656,
+  "avg_coverage_after_pct": 64.20709501772562,
+  "equity_available": true,
+  "equity_pct_majority_black": 68.98127763171127,
+  "equity_pct_majority_hispanic": 25.830535562280822
+}

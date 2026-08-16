@@ -1,0 +1,25 @@
+# Geospatial stack
+# Local (Windows): use conda --system-site-packages venv setup (see README)
+# Cloud (Streamlit Community Cloud / Docker): pyogrio ships bundled GDAL wheels,
+#   no system GDAL install needed.
+geopandas>=1.0
+pyogrio>=0.7        # replaces fiona; bundled GDAL binary wheels for Linux/Mac/Windows
+osmnx>=2.0
+networkx
+shapely>=2.0
+pyproj>=3.6
+folium>=0.18
+branca>=0.8         # GeoJson choropleth colormap legend
+
+# App + data
+streamlit>=1.50
+streamlit-folium>=0.27
+pandas
+numpy
+requests
+python-dotenv
+pyarrow
+arcgis2geojson
+
+# Tests
+pytest

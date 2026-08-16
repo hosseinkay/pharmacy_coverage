@@ -1,0 +1,10 @@
+{
+  "center": [
+    41.8781,
+    -87.6298
+  ],
+  "num_pharmacies": 10,
+  "base_radius": 0.5,
+  "strategy": "Balanced need (recommended)",
+  "grid_spacing_meters": 200.0
+}

@@ -1,0 +1,33 @@
+# Secrets — never commit
+.env
+
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Virtual environment
+.venv/
+
+# ---------------------------------------------------------------------------
+# OSM / network cache — large binary blobs, NOT committed.
+#
+# IMPORTANT: gitignore negation only works when the parent directory is not
+# itself excluded. Using `.cache/*` (contents) instead of `.cache/` (dir)
+# lets git descend and honour the !-rules for individual files.
+# ---------------------------------------------------------------------------
+.cache/*
+
+# Small, static Chicago reference files committed so Streamlit Cloud never
+# needs to call external APIs on a cold start (< 10 MB total).
+!.cache/chicago/
+.cache/chicago/*
+!.cache/chicago/acs_need_factors.parquet
+!.cache/chicago/acs_tract_data.parquet
+!.cache/chicago/census_blocks.parquet
+!.cache/chicago/community_areas.parquet
+!.cache/chicago/opportunity_zone_tracts.parquet
+
+!.cache/chicago-illinois-usa/
+.cache/chicago-illinois-usa/*
+!.cache/chicago-illinois-usa/zoned_land.parquet
