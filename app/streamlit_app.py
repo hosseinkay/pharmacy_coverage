@@ -921,41 +921,66 @@ def get_existing_coverage_shape(pharmacies: gpd.GeoDataFrame, radius_miles: floa
 def get_new_coverage_shape(selected_4326: gpd.GeoDataFrame, radius_miles: float):
     """Return merged street-network isochrone for the selected candidate sites.
 
-    Loads one of the pre-computed per-N parquets committed to .cache/:
-      new_sites_iso_n{N:02d}_r{radius:.2f}.parquet
-    Each contains a single merged EPSG:4326 polygon (union of N ego_graph
-    isochrones for the top-N demo sites in greedy rank order).
+    Lookup strategy (no circle fallback — ever):
 
-    This mirrors exactly how get_existing_coverage_shape loads the green
-    layer — simple parquet read, gdf.geometry.iloc[0], no runtime graph
-    loading, no fallback to circles.  If the parquet is absent (N > 10,
-    custom radius, or different strategy picked) the map simply omits the
-    blue layer rather than showing misleading straight-line buffers.
+    1. candidate_iso_by_coord_r{r:.2f}.parquet  — all 7283 demo candidates
+       indexed by coord_key "lon_lat" (5 decimal EPSG:4326, ≈ 1 m precision).
+       The coordinate key is stable across pipeline runs because generate_grid_
+       candidates is deterministic on committed zoned_land.parquet.  Works for
+       any live optimization regardless of candidate_id value.
+
+    2. new_sites_iso_n{N:02d}_r{r:.2f}.parquet  — pre-committed per-N merged
+       isochrones for the default demo greedy rank order.  Only used when the
+       all-candidates parquet is absent (e.g., first deploy before precompute).
+       May not align exactly with the live selected sites in that case.
+
+    If nothing matches: omit the blue layer.  Better to show nothing than a
+    misleading straight-line buffer (circle) or wrong-location isochrone.
     """
     if selected_4326.empty:
         return None, ""
 
-    # Session cache — keyed by (N, radius) since the per-N parquet is
-    # independent of which specific candidates were chosen.
-    n = len(selected_4326)
+    # Session cache keyed by exact selected coordinates + radius (not just N —
+    # two different sets of N candidates must produce different isochrones).
+    coord_keys = tuple(sorted(
+        f"{r.geometry.x:.5f}_{r.geometry.y:.5f}"
+        for _, r in selected_4326.iterrows()
+    ))
     cache_store = st.session_state.setdefault("new_coverage_cache", {})
-    cache_key = (n, round(radius_miles, 4))
+    cache_key = (coord_keys, round(radius_miles, 4))
     if cache_key in cache_store:
         return cache_store[cache_key]
 
     place_name = get_osm_place_name(CITY_KEY)
     slug = cache_mod.slugify(place_name)
-    iso_path = cache_mod.city_cache_dir(slug) / f"new_sites_iso_n{n:02d}_r{radius_miles:.2f}.parquet"
+    cache_dir = cache_mod.city_cache_dir(slug)
 
-    if iso_path.exists():
-        gdf = gpd.read_parquet(iso_path)
+    # ── 1. Coordinate-keyed all-candidate lookup ────────────────────────────
+    coord_path = cache_dir / f"candidate_iso_by_coord_r{radius_miles:.2f}.parquet"
+    if coord_path.exists():
+        if "cand_iso_by_coord" not in st.session_state:
+            st.session_state["cand_iso_by_coord"] = gpd.read_parquet(coord_path)
+        cand_iso = st.session_state["cand_iso_by_coord"]
+        sel_keys = list(coord_keys)
+        matched = cand_iso.loc[[k for k in sel_keys if k in cand_iso.index]]
+        if not matched.empty:
+            geom = matched.geometry.union_all()
+            if geom is not None and not geom.is_empty:
+                result = (geom, "Street-network isochrone")
+                cache_store[cache_key] = result
+                return result
+
+    # ── 2. Per-N fallback (pre-committed, used only when coord parquet absent)
+    n = len(selected_4326)
+    n_path = cache_dir / f"new_sites_iso_n{n:02d}_r{radius_miles:.2f}.parquet"
+    if n_path.exists():
+        gdf = gpd.read_parquet(n_path)
         if not gdf.empty:
             result = (gdf.geometry.iloc[0], "Street-network isochrone")
             cache_store[cache_key] = result
             return result
 
-    # Parquet not available (N > 10 or custom settings) — omit blue layer.
-    # Never fall back to straight-line buffers; circles are visually wrong.
+    # Nothing matched — omit blue layer.
     return None, ""
 
 
