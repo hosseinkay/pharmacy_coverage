@@ -938,24 +938,44 @@ def get_new_coverage_shape(selected_4326: gpd.GeoDataFrame, radius_miles: float)
     if cache_key in cache_store:
         return cache_store[cache_key]
 
-    # 2. Runtime computation via committed graphml -----------------------
-    _, graph_cached = _network_cache_available(radius_miles)
-    if graph_cached:
-        try:
-            place_name = get_osm_place_name(CITY_KEY)
-            if "osm_graph" not in st.session_state:
-                st.session_state["osm_graph"] = isochrones.get_network_graph_cached(place_name)
-            graph = st.session_state["osm_graph"]
-            geom = isochrones.compute_merged_isochrone(graph, selected_4326, radius_miles)
-            result = (geom, "Street-network isochrone")
-            cache_store[cache_key] = result
-            return result
-        except Exception:
-            pass
+    # 2. Pre-computed per-candidate lookup --------------------------------
+    # candidate_isochrones_r{radius}.parquet is indexed by candidate_id and
+    # holds the ego_graph isochrone for each demo candidate.  Union whichever
+    # rows match the currently selected candidate_ids.
+    import traceback as _tb
+    _iso_err = ""
+    try:
+        from core.city_data import get_osm_place_name as _gopn
+        _place = _gopn(CITY_KEY)
+        if "candidate_iso_gdf" not in st.session_state:
+            st.session_state["candidate_iso_gdf"] = isochrones.get_candidate_isochrones(
+                _place, radius_miles
+            )
+        _cand_iso = st.session_state["candidate_iso_gdf"]
+        if _cand_iso is not None:
+            _sel_ids = selected_4326["candidate_id"].astype(int).tolist()
+            _matched = _cand_iso[_cand_iso.index.isin(_sel_ids)]
+            if not _matched.empty:
+                _geom = _matched.geometry.union_all()
+                if _geom is not None and not _geom.is_empty:
+                    _result = (_geom, "Street-network isochrone")
+                    cache_store[cache_key] = _result
+                    return _result
+                _iso_err = f"union returned empty; matched={len(_matched)}"
+            else:
+                _iso_err = (
+                    f"no matched rows; sel_ids={_sel_ids[:3]}…; "
+                    f"index sample={list(_cand_iso.index[:3])}"
+                )
+        else:
+            _iso_err = "candidate_iso_gdf is None (parquet not found)"
+    except Exception as _e:
+        _iso_err = f"{type(_e).__name__}: {_e} | {_tb.format_exc()[-200:]}"
+    st.session_state["_blue_iso_debug"] = _iso_err
 
     # 3. Straight-line buffer fallback -----------------------------------
     geom_3857 = cov_mod.merged_buffer(selected_4326, radius_miles)
-    result = (to_wgs84(geom_3857), "Straight-line buffer")
+    result = (to_wgs84(geom_3857), "Straight-line buffer (lookup failed)")
     cache_store[cache_key] = result
     return result
 
@@ -1498,6 +1518,9 @@ with _results_slot.container():
                 "Green: existing pharmacy coverage. Blue: area newly covered by the selected sites. "
                 "Hover a numbered marker for site details."
             )
+            _dbg = st.session_state.get("_blue_iso_debug", "")
+            if _dbg:
+                st.warning(f"🔍 Blue iso debug: {_dbg[:400]}")
 
         # Selected sites table ----------------------------------------------
         subsection_header("Selected pharmacy sites")
