@@ -921,47 +921,42 @@ def get_existing_coverage_shape(pharmacies: gpd.GeoDataFrame, radius_miles: floa
 def get_new_coverage_shape(selected_4326: gpd.GeoDataFrame, radius_miles: float):
     """Return merged street-network isochrone for the selected candidate sites.
 
-    Priority order:
-    1. Session-state cache keyed by (selected index set, radius) — instant on
-       re-renders and correctly scoped to the actual selection.
-    2. Runtime computation via the committed drive_network.graphml.  The graph
-       object is cached in session_state so the 38 MB parse happens at most
-       once per session; per-selection isochrone computation takes ~5 s.
-    3. Straight-line buffer — last resort if the graphml is unavailable.
+    Loads one of the pre-computed per-N parquets committed to .cache/:
+      new_sites_iso_n{N:02d}_r{radius:.2f}.parquet
+    Each contains a single merged EPSG:4326 polygon (union of N ego_graph
+    isochrones for the top-N demo sites in greedy rank order).
+
+    This mirrors exactly how get_existing_coverage_shape loads the green
+    layer — simple parquet read, gdf.geometry.iloc[0], no runtime graph
+    loading, no fallback to circles.  If the parquet is absent (N > 10,
+    custom radius, or different strategy picked) the map simply omits the
+    blue layer rather than showing misleading straight-line buffers.
     """
     if selected_4326.empty:
         return None, ""
 
-    # 1. Session cache — keyed by the exact set of selected candidates ----
+    # Session cache — keyed by (N, radius) since the per-N parquet is
+    # independent of which specific candidates were chosen.
+    n = len(selected_4326)
     cache_store = st.session_state.setdefault("new_coverage_cache", {})
-    cache_key = (frozenset(selected_4326.index.tolist()), round(radius_miles, 4))
+    cache_key = (n, round(radius_miles, 4))
     if cache_key in cache_store:
         return cache_store[cache_key]
 
-    # 2. Per-candidate lookup (candidate_isochrones_r0.50.parquet, 168 KB) ---
-    # Indexed by candidate_id; contains ego_graph isochrones for each demo
-    # candidate.  Union whichever rows match the currently selected ids.
-    try:
-        place_name = get_osm_place_name(CITY_KEY)
-        if "candidate_iso_gdf" not in st.session_state:
-            st.session_state["candidate_iso_gdf"] = isochrones.get_candidate_isochrones(
-                place_name, radius_miles
-            )
-        cand_iso = st.session_state["candidate_iso_gdf"]
-        if cand_iso is not None:
-            geom = isochrones.isochrone_for_selected(cand_iso, selected_4326)
-            if geom is not None and not geom.is_empty:
-                result = (geom, "Street-network isochrone")
-                cache_store[cache_key] = result
-                return result
-    except Exception:
-        pass
+    place_name = get_osm_place_name(CITY_KEY)
+    slug = cache_mod.slugify(place_name)
+    iso_path = cache_mod.city_cache_dir(slug) / f"new_sites_iso_n{n:02d}_r{radius_miles:.2f}.parquet"
 
-    # 3. Straight-line buffer fallback -----------------------------------
-    geom_3857 = cov_mod.merged_buffer(selected_4326, radius_miles)
-    result = (to_wgs84(geom_3857), "Straight-line buffer")
-    cache_store[cache_key] = result
-    return result
+    if iso_path.exists():
+        gdf = gpd.read_parquet(iso_path)
+        if not gdf.empty:
+            result = (gdf.geometry.iloc[0], "Street-network isochrone")
+            cache_store[cache_key] = result
+            return result
+
+    # Parquet not available (N > 10 or custom settings) — omit blue layer.
+    # Never fall back to straight-line buffers; circles are visually wrong.
+    return None, ""
 
 
 # ---------------------------------------------------------------------------
