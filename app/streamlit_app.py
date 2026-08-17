@@ -838,9 +838,7 @@ def render_dark_table(df: pd.DataFrame, rank_col: str | None = None) -> None:
 NEED_COLORMAP = bcm.LinearColormap(
     colors=["#FFEC80", "#FEB24C", "#FC4E2A", "#BD0026"],
     vmin=0, vmax=100,
-    caption="Pharmacy Need Index",
-    index=[0, 100],
-    tick_labels=["Lower need", "Higher need"],
+    caption="Pharmacy Need Index (0–100)",
     text_color="#e8eaed",
 )
 
