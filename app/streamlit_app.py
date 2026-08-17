@@ -764,6 +764,40 @@ def add_filled_geometry(m, geom_4326, color, opacity, tooltip):
     ).add_to(m)
 
 
+def add_coverage_circles(
+    folium_map,
+    pharmacies_4326: gpd.GeoDataFrame,
+    radius_miles: float,
+    color: str,
+    fill_opacity: float,
+    label: str,
+) -> None:
+    """Draw one coverage-radius circle per pharmacy as a single GeoJson layer.
+
+    Renders individual circles rather than a merged union so the viewer sees
+    each pharmacy's specific reach and where circles overlap (dense coverage)
+    vs where they're absent (pharmacy deserts).  Uses resolution=8 to keep
+    the payload small (~150 KB for ~850 Chicago pharmacies).
+    """
+    if pharmacies_4326 is None or pharmacies_4326.empty:
+        return
+    try:
+        pharm_3857 = pharmacies_4326.to_crs("EPSG:3857")
+        circles = pharm_3857.geometry.buffer(
+            radius_miles * cov_mod.METERS_PER_MILE, resolution=8
+        )
+        circles_4326 = gpd.GeoSeries(circles, crs="EPSG:3857").to_crs("EPSG:4326")
+        folium.GeoJson(
+            circles_4326.__geo_interface__,
+            style_function=lambda _f, c=color, o=fill_opacity: {
+                "fillColor": c, "color": c, "weight": 0.4, "fillOpacity": o,
+            },
+            tooltip=folium.Tooltip(label),
+        ).add_to(folium_map)
+    except Exception:
+        pass  # never crash the map render over a cosmetic layer
+
+
 def numbered_icon(rank) -> folium.DivIcon:
     """Numbered circle marker using the portfolio accent teal."""
     return folium.DivIcon(
@@ -1076,16 +1110,25 @@ with st.container(border=True):
 
         if _map_pharmacies is not None:
             pharmacies_4326 = _map_pharmacies.to_crs("EPSG:4326")
+            # Coverage radius circles (added first so pharmacy dots sit on top)
+            add_coverage_circles(
+                m_preview, pharmacies_4326, 0.5, "#4fa89a", 0.10,
+                "~10-min walk from this pharmacy",
+            )
+            # Pharmacy location dots
             folium.GeoJson(
                 pharmacies_4326[["geometry"]].__geo_interface__,
                 marker=folium.CircleMarker(
-                    radius=2, color="#4fa89a", fill=True, fill_color="#4fa89a", fill_opacity=0.55,
+                    radius=2, color="#4fa89a", fill=True, fill_color="#4fa89a", fill_opacity=0.85,
                 ),
                 tooltip=folium.Tooltip("Existing pharmacy"),
             ).add_to(m_preview)
 
         st_folium(m_preview, height=500, use_container_width=True, returned_objects=[], key="map_section01")
-        st.caption("Teal dots = ~850 existing pharmacies. Hover any tract for details.")
+        st.caption(
+            "Teal circles = walkability radius (~10-min walk) around each of ~850 existing pharmacies. "
+            "Gaps show pharmacy deserts. Hover any tract for details."
+        )
     else:
         st.info("Map loading — if this persists, reload the page.", icon="🗺️")
 
@@ -1392,31 +1435,6 @@ with _results_slot.container():
             ("uninsured_pct_display",             "Uninsured:"),
         ]
 
-        # Compute coverage shapes once (disk-cached after first run)
-        with st.spinner("Computing coverage areas…"):
-            existing_shape, existing_status = get_existing_coverage_shape(
-                result.pharmacies, _result_radius
-            )
-            new_shape, new_status = get_new_coverage_shape(selected, _result_radius)
-
-        # Compute new-only shape (difference of new union minus existing).
-        # Falls back to the full new_shape if the difference is empty (can happen
-        # when all selected sites are geometrically inside the existing coverage
-        # zone, which means the optimizer found high-need areas that happen to be
-        # near an existing pharmacy — still worth showing).
-        new_only = None
-        if new_shape is not None:
-            if existing_shape is not None:
-                try:
-                    ns3 = gpd.GeoSeries([new_shape], crs="EPSG:4326").to_crs(cov_mod.PROJECTED_CRS).iloc[0]
-                    es3 = gpd.GeoSeries([existing_shape], crs="EPSG:4326").to_crs(cov_mod.PROJECTED_CRS).iloc[0]
-                    diff = ns3.difference(es3)
-                    new_only = to_wgs84(diff) if not diff.is_empty else new_shape
-                except Exception:
-                    new_only = new_shape
-            else:
-                new_only = new_shape
-
         def _add_selected_markers(folium_map) -> None:
             for _, row in selected.iterrows():
                 popup_html = (
@@ -1456,11 +1474,14 @@ with _results_slot.container():
         elif map_view == "Existing coverage only":
             need_choropleth_layer(tract_res, tooltip_cols).add_to(m)
             NEED_COLORMAP.add_to(m)
-            add_filled_geometry(m, existing_shape, color="#4ade80", opacity=0.45, tooltip="Existing coverage")
+            add_coverage_circles(
+                m, result.pharmacies, _result_radius, "#4ade80", 0.15,
+                "Existing pharmacy coverage radius",
+            )
             st_folium(m, height=560, use_container_width=True, returned_objects=[], key="map_result_existing")
             st.caption(
-                f"Baseline view: Pharmacy Need Index choropleth + existing coverage ({existing_status}). "
-                "No new sites shown — use 'After optimization' to see recommendations."
+                f"Baseline view: Pharmacy Need Index choropleth + {walk_minutes(_result_radius)}-min walk radius "
+                "per existing pharmacy. No new sites shown — use 'After optimization' to see recommendations."
             )
 
         else:  # "After optimization" (default)
@@ -1475,17 +1496,22 @@ with _results_slot.container():
                     ),
                     tooltip=folium.GeoJsonTooltip(fields=["label"]),
                 ).add_to(m)
-            add_filled_geometry(m, existing_shape, color="#4ade80", opacity=0.45, tooltip="Existing coverage")
-            if new_only is not None:
-                add_filled_geometry(
-                    m, new_only, color="#38bdf8", opacity=0.65,
-                    tooltip="Newly covered by selected sites",
-                )
+            # Existing pharmacy coverage circles (green, subtle — shows baseline)
+            add_coverage_circles(
+                m, result.pharmacies, _result_radius, "#4ade80", 0.13,
+                "Existing pharmacy coverage radius",
+            )
+            # New selected site coverage circles (blue, prominent — shows the gain)
+            add_coverage_circles(
+                m, selected, _result_radius, "#38bdf8", 0.55,
+                "New site coverage radius",
+            )
             _add_selected_markers(m)
             st_folium(m, height=560, use_container_width=True, returned_objects=[], key="map_result_after_opt")
             st.caption(
-                "Green: existing pharmacy coverage. Blue: area newly covered by the selected sites. "
-                "Hover a numbered marker for site details."
+                f"Green circles: {walk_minutes(_result_radius)}-min walk radius around each existing pharmacy. "
+                "Blue circles: coverage radius of newly selected sites. "
+                "Numbered markers = selected sites. Hover for details."
             )
 
         # Selected sites table ----------------------------------------------
