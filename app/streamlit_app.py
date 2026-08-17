@@ -402,27 +402,40 @@ st.markdown(
       border:        1px solid var(--border) !important;
       border-radius: var(--r) !important;
     }
-    /* summary and every element inside it — all states, all depths.
-       Without this, the summary header goes white when open+unfocused. */
+    /* Summary row: background + text color only.
+       IMPORTANT: do NOT set font-family/font-size on summary * — that
+       overrides Streamlit's internal icon font and causes the expand arrow
+       to render as raw ligature text (e.g. "_arr") instead of the ▾ glyph. */
     [data-testid="stExpander"] summary,
-    [data-testid="stExpander"] summary *,
     [data-testid="stExpander"] details > summary,
-    [data-testid="stExpander"] details[open] > summary,
-    [data-testid="stExpander"] details[open] > summary * {
+    [data-testid="stExpander"] details[open] > summary {
       background-color: var(--bg-e) !important;
       color:            var(--fg-m) !important;
-      font-family:      var(--font-b) !important;
-      font-size:        0.85rem !important;
-      font-weight:      500 !important;
+      list-style:       none !important;
     }
-    [data-testid="stExpander"] summary:hover,
-    [data-testid="stExpander"] summary:hover * { color: var(--fg) !important; }
-    /* The content area below the summary when open */
+    /* Apply Inter only to the text label — not to icon/svg children */
+    [data-testid="stExpander"] summary p,
+    [data-testid="stExpander"] summary > div > p,
+    [data-testid="stExpander"] summary > div > span {
+      font-family: var(--font-b) !important;
+      font-size:   0.85rem !important;
+      font-weight: 500 !important;
+      color:       var(--fg-m) !important;
+    }
+    [data-testid="stExpander"] summary:hover p,
+    [data-testid="stExpander"] summary:hover > div > p,
+    [data-testid="stExpander"] summary:hover > div > span { color: var(--fg) !important; }
+    /* SVG expand/collapse arrow — ensure visible and tinted */
+    [data-testid="stExpander"] svg {
+      fill:    var(--fg-s) !important;
+      display: inline-block !important;
+    }
+    [data-testid="stExpander"] summary:hover svg { fill: var(--fg) !important; }
+    /* Content area below summary when open */
     [data-testid="stExpander"] details > div,
     [data-testid="stExpander"] details > div > div {
       background-color: var(--bg-e) !important;
     }
-    [data-testid="stExpander"] svg { fill: var(--fg-s) !important; }
 
     /* ── Metric cards ─────────────────────────────────────────────── */
     [data-testid="metric-container"] {
@@ -830,18 +843,48 @@ def gain_choropleth_layer(
     )
 
 
+def _network_cache_available(radius_miles: float) -> tuple[bool, bool]:
+    """Return (isochrone_parquet_exists, graphml_exists).
+
+    Checks whether the pre-computed drive network or per-radius isochrone
+    parquet already lives on disk.  When neither is present (e.g. fresh
+    Streamlit Cloud deployment) we skip network computation entirely and
+    fall back to straight-line buffers immediately — attempting to download
+    the full Chicago drive network from OSM would time out or exhaust RAM.
+    """
+    place_name = get_osm_place_name(CITY_KEY)
+    slug = cache_mod.slugify(place_name)
+    city_dir = cache_mod.CACHE_DIR / slug
+    iso_exists = (city_dir / f"existing_isochrone_r{radius_miles:.2f}.parquet").exists()
+    graph_exists = (city_dir / "drive_network.graphml").exists()
+    return iso_exists, graph_exists
+
+
 def get_existing_coverage_shape(pharmacies: gpd.GeoDataFrame, radius_miles: float):
     cache_store = st.session_state.setdefault("existing_coverage_cache", {})
     key = round(radius_miles, 4)
     if key in cache_store:
         return cache_store[key]
-    try:
-        place_name = get_osm_place_name(CITY_KEY)
-        geom = isochrones.get_merged_existing_isochrone_cached(place_name, pharmacies, radius_miles)
-        status = "Street-network isochrone"
-    except isochrones.IsochroneUnavailable as exc:
+
+    iso_cached, graph_cached = _network_cache_available(radius_miles)
+
+    if iso_cached or graph_cached:
+        # Network data is on disk — use it (fast path: loads from parquet or graphml)
+        try:
+            place_name = get_osm_place_name(CITY_KEY)
+            geom = isochrones.get_merged_existing_isochrone_cached(place_name, pharmacies, radius_miles)
+            status = "Street-network isochrone"
+        except Exception:
+            # Corrupted cache or unexpected error — fall back gracefully
+            geom = to_wgs84(cov_mod.merged_buffer(pharmacies, radius_miles))
+            status = "Straight-line buffer"
+    else:
+        # No cached network on disk — use straight-line buffer immediately.
+        # Downloading the full drive network from OSM is too slow and
+        # memory-intensive for Streamlit Cloud cold starts.
         geom = to_wgs84(cov_mod.merged_buffer(pharmacies, radius_miles))
-        status = f"Straight-line buffer (network unavailable: {exc})"
+        status = "Straight-line buffer"
+
     cache_store[key] = (geom, status)
     return cache_store[key]
 
@@ -849,14 +892,20 @@ def get_existing_coverage_shape(pharmacies: gpd.GeoDataFrame, radius_miles: floa
 def get_new_coverage_shape(selected_4326: gpd.GeoDataFrame, radius_miles: float):
     if selected_4326.empty:
         return None, ""
-    try:
-        place_name = get_osm_place_name(CITY_KEY)
-        graph = isochrones.get_network_graph_cached(place_name)
-        geom = isochrones.compute_merged_isochrone(graph, selected_4326, radius_miles)
-        return geom, "Street-network isochrone"
-    except isochrones.IsochroneUnavailable as exc:
-        geom_3857 = cov_mod.merged_buffer(selected_4326, radius_miles)
-        return to_wgs84(geom_3857), f"Straight-line buffer (network unavailable: {exc})"
+
+    _, graph_cached = _network_cache_available(radius_miles)
+
+    if graph_cached:
+        try:
+            place_name = get_osm_place_name(CITY_KEY)
+            graph = isochrones.get_network_graph_cached(place_name)
+            geom = isochrones.compute_merged_isochrone(graph, selected_4326, radius_miles)
+            return geom, "Street-network isochrone"
+        except Exception:
+            pass  # fall through to buffer fallback
+
+    geom_3857 = cov_mod.merged_buffer(selected_4326, radius_miles)
+    return to_wgs84(geom_3857), "Straight-line buffer"
 
 
 # ---------------------------------------------------------------------------
@@ -922,10 +971,22 @@ st.markdown(
       <span class="ph-eyebrow">Chicago &middot; Pharmacy Access Planning</span>
       <h1 class="ph-hero-title">Chicago Pharmacy<br>Desert Planner</h1>
       <p class="ph-hero-body">
-        <strong>Chicago's pharmacy access crisis falls hardest on the South and West Sides</strong>
-        — where households lack cars, incomes are low, and conditions like diabetes and
-        hypertension demand regular prescriptions. Below: where need is highest,
-        and the 10 sites where a new pharmacy would do the most good.
+        Pharmacy deserts are areas where getting to a pharmacy is difficult enough
+        that routine access to prescriptions becomes a real problem.
+        <strong>Chicago is one of the largest cities where that gap shows up clearly
+        across neighborhoods.</strong>
+      </p>
+      <p class="ph-hero-body">
+        But how big is the problem, really? One way to start is by looking at every
+        pharmacy in Chicago and asking how much of the city falls within about a
+        10-minute walk along the street network. That gives a simple picture of where
+        pharmacy access is already strong — and where it starts to fall off.
+      </p>
+      <p class="ph-hero-body">
+        From there, the analysis brings in health and demographic data to better
+        understand <em>who</em> is affected and where limited access matters most —
+        then uses an optimization algorithm to identify the sites where new pharmacies
+        would do the most good.
       </p>
     </div>
     """,
@@ -1059,7 +1120,7 @@ with st.container(border=True):
     with _n_col:
         st.markdown("**New pharmacies to site**")
         num_pharmacies = st.number_input(
-            "New pharmacies", min_value=1, max_value=30, value=10,
+            "New pharmacies", min_value=1, max_value=30, value=5,
             label_visibility="collapsed",
         )
 
