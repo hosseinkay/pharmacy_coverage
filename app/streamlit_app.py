@@ -683,6 +683,17 @@ st.markdown(
       border-radius: 0 var(--r) var(--r) 0 !important;
     }
     .ph-optimizer-narrative strong { color: var(--fg) !important; }
+
+    /* ── Tab bar separator ────────────────────────────────────────── */
+    [data-testid="stTabs"] > div:first-child {
+      border-bottom: 1px solid var(--border) !important;
+      margin-bottom: 1.25rem !important;
+    }
+    [data-testid="stTabs"] button[role="tab"] {
+      font-family: var(--font-b) !important;
+      font-size: 0.85rem !important;
+      letter-spacing: 0.02em !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -825,7 +836,12 @@ def render_dark_table(df: pd.DataFrame, rank_col: str | None = None) -> None:
 
 # Need-index choropleth: warm yellow→red pops on the dark map tiles
 NEED_COLORMAP = bcm.LinearColormap(
-    colors=["#FFEC80", "#FEB24C", "#FC4E2A", "#BD0026"], vmin=0, vmax=100
+    colors=["#FFEC80", "#FEB24C", "#FC4E2A", "#BD0026"],
+    vmin=0, vmax=100,
+    caption="Pharmacy Need Index",
+    index=[0, 100],
+    tick_labels=["Lower need", "Higher need"],
+    text_color="#e8eaed",
 )
 
 # Coverage-gain choropleth: teal gradient shows where optimizer made the biggest difference
@@ -1045,28 +1061,28 @@ st.markdown(
       <h1 class="ph-hero-title">Chicago Pharmacy<br>Desert Planner</h1>
       <p class="ph-hero-body">
         Pharmacy deserts are areas where getting to a pharmacy is difficult enough
-        that routine access to prescriptions becomes a real problem. Chicago is one
-        of the largest cities where that gap can vary dramatically from one
-        neighborhood to another.
+        that routine access to prescriptions becomes a real problem.
+        <strong>Chicago is one of the largest cities where that gap can vary
+        dramatically from one neighborhood to another.</strong>
       </p>
-      <div class="ph-pullquote">So how big is the problem?</div>
       <p class="ph-hero-body">
-        A good place to start is simply by looking at where every pharmacy in Chicago
-        is today and asking how much of the city is actually within a reasonable
-        walking distance. Here, that means about a 10-minute walk along the street
-        network.
+        So where does the problem show up most clearly?
       </p>
-      <p class="ph-hero-body" style="margin-top:0.85rem !important;">
-        But distance alone only tells part of the story. Limited pharmacy access
-        matters differently in a neighborhood where most households have a car than
-        it does in one where many do not. The same is true for communities with
-        higher poverty, older populations, mobility limitations, or greater rates
-        of conditions that require regular prescriptions.
+      <p class="ph-hero-body">
+        A useful starting point is to look at where pharmacies are located today
+        and compare that with where pharmacy-related need is highest across the city.
+      </p>
+      <p class="ph-hero-body">
+        Distance matters, but it is only part of the story. Limited pharmacy access
+        can have a much bigger effect in communities where more households lack a
+        vehicle, incomes are lower, residents are older or have mobility limitations,
+        or conditions like diabetes and hypertension make regular prescriptions
+        more important.
       </p>
       <div class="ph-map-lead">
-        <p>The map below brings those pieces together to show where pharmacy access
-        is already strong, where it falls off, and where limited access overlaps
-        with greater community need.</p>
+        <p><strong>The map below brings those pieces together, showing existing
+        pharmacy locations alongside the parts of Chicago where pharmacy need
+        is highest.</strong></p>
       </div>
     </div>
     """,
@@ -1076,12 +1092,20 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # 01 · Current pharmacy need (full-width map — always balanced-need baseline)
 # ---------------------------------------------------------------------------
+st.markdown(
+    "## Who is most affected by limited access?\n\n"
+    "A pharmacy being far away is not equally disruptive for every neighborhood.\n\n"
+    "To better understand where access matters most, this analysis looks at vehicle "
+    "access, poverty, age, mobility limitations, uninsured status, and chronic conditions "
+    "such as diabetes and hypertension. These factors are combined into the "
+    "**Pharmacy Need Index**, which helps compare pharmacy-related need across "
+    "Chicago's census tracts."
+)
+
 with st.container(border=True):
     section_header("01", "Where is pharmacy need highest?")
     st.caption(
-        "Tracts colored by Pharmacy Need Index, a composite of vehicle access, "
-        "poverty, chronic medication burden, age 65+, mobility, and uninsured rate, "
-        "each percentile-ranked across Chicago's 801 census tracts. "
+        "Residential land colored by Pharmacy Need Index. "
         "Teal dots show existing pharmacy locations."
     )
 
@@ -1126,7 +1150,6 @@ with st.container(border=True):
 
         m_preview = build_map(_map_center, fit_to=preview_layer)
         need_choropleth_layer(preview_layer, _preview_tooltip_cols).add_to(m_preview)
-        NEED_COLORMAP.caption = "Pharmacy Need Index (0–100)"
         NEED_COLORMAP.add_to(m_preview)
 
         if _map_pharmacies is not None:
@@ -1141,6 +1164,20 @@ with st.container(border=True):
 
         st_folium(m_preview, height=500, use_container_width=True, returned_objects=[], key="map_section01")
         st.caption("Teal dots = ~850 existing pharmacies. Hover any tract for details.")
+
+        st.markdown(
+            "**What are we looking at?**  \n"
+            "The highlighted areas represent **residential land across Chicago**, rather than the full "
+            "physical area of each census tract. This keeps the map focused on the places where "
+            "people actually live.\n\n"
+            "Each area is shaded using the **Pharmacy Need Index**, a score that combines population "
+            "with health and demographic factors from the U.S. Census and CDC. Higher values represent "
+            "areas where more people live and where the factors associated with pharmacy access and "
+            "recurring medication needs are more concentrated.\n\n"
+            "Existing pharmacies are shown as points on top of the map. "
+            "For the full breakdown of the index, factor weights, data sources, and calculation, "
+            "see the **Methodology & Model Design** tab."
+        )
     else:
         st.info("Map loading. If this persists, reload the page.", icon="🗺️")
 
@@ -1183,6 +1220,15 @@ _results_slot = st.empty()
 # ---------------------------------------------------------------------------
 # 03 · Adjust and re-run (controls — de-emphasized; results appear above via _results_slot)
 # ---------------------------------------------------------------------------
+st.markdown(
+    "## So where would a new pharmacy actually help?\n\n"
+    "Finding a high-need area is only part of the problem.\n\n"
+    "A new pharmacy is most useful when it reaches people who are not already well served, "
+    "and adding several locations too close together can create redundant coverage. "
+    "The planner evaluates candidate locations across the city and looks for the sites "
+    "that create the greatest additional access to unmet need."
+)
+
 with st.container(border=True):
     section_header("03", "Adjust and re-run")
 
@@ -1334,6 +1380,13 @@ result = st.session_state.get("result")
 with _results_slot.container():
   if result is not None:
     st.divider()
+    st.markdown(
+        "## What changes after new pharmacies are added?\n\n"
+        "The results below show which locations were selected, how much additional need "
+        "they reach, and which communities see the largest change in access.\n\n"
+        "The model gives each new location credit for the need it newly covers, so later "
+        "selections are less likely to simply duplicate the impact of sites already chosen."
+    )
     with st.container(border=True):
         section_header("02", "Optimization results")
 
@@ -1734,6 +1787,11 @@ if result is not None:
 # ---------------------------------------------------------------------------
 st.divider()
 with st.expander("Methodology, data sources & assumptions", expanded=False):
+    st.caption(
+        "This section gives a concise overview of how the planner works. "
+        "For the full optimization formulation, algorithm design, data sources, "
+        "and analytical assumptions, see the **Methodology & Model Design** tab."
+    )
     section_header("", "Pharmacy Need Index")
     st.markdown(
         "Six factors, each **percentile-ranked across Chicago's 801 census tracts** before "
@@ -1766,11 +1824,9 @@ with st.expander("Methodology, data sources & assumptions", expanded=False):
         "**Opportunity Zones** act as an eligibility constraint applied before scoring, not a reward signal."
     )
 
-    st.info(
-        "Want to see exactly how the model works? The **Methodology & Model Design** tab "
-        "includes the full optimization formulation, algorithm pseudocode, approximation "
-        "guarantee, all data sources, analytical assumptions, and deliberate design decisions.",
-        icon="📐",
+    st.caption(
+        "For the full optimization formulation, algorithm pseudocode, approximation guarantee, "
+        "data sources, and design decisions, see the **Methodology & Model Design** tab."
     )
 
 _planner_tab.__exit__(None, None, None)
