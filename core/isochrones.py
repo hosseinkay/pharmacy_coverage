@@ -129,3 +129,52 @@ def get_merged_existing_isochrone_cached(
         {"geometry": [merged] if merged is not None else []}, crs="EPSG:4326"
     ).to_parquet(path)
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Per-candidate lookup table (pre-computed, committed to git)
+# ---------------------------------------------------------------------------
+
+def _candidate_iso_path(osm_place_name: str, radius_miles: float) -> Path:
+    slug = cache.slugify(osm_place_name)
+    return cache.city_cache_dir(slug) / f"candidate_isochrones_r{radius_miles:.2f}.parquet"
+
+
+def get_candidate_isochrones(osm_place_name: str, radius_miles: float):
+    """Load the pre-computed per-candidate isochrone lookup table.
+
+    Returns a GeoDataFrame indexed by ``candidate_id`` (int) with one ego_graph
+    isochrone polygon per row, or ``None`` if the parquet is absent.
+
+    Build / refresh with::
+
+        python scripts/precompute_candidate_isochrones.py
+    """
+    path = _candidate_iso_path(osm_place_name, radius_miles)
+    if not path.exists():
+        return None
+    return gpd.read_parquet(path)
+
+
+def isochrone_for_selected(
+    candidate_iso_gdf: gpd.GeoDataFrame,
+    selected_4326: gpd.GeoDataFrame,
+) -> object:
+    """Union pre-computed isochrones for whichever candidates are selected.
+
+    Args:
+        candidate_iso_gdf: GeoDataFrame indexed by ``candidate_id`` — the
+            output of :func:`get_candidate_isochrones`.
+        selected_4326: Selected candidate sites; must contain a
+            ``candidate_id`` column.
+
+    Returns:
+        Shapely geometry (EPSG:4326) or ``None`` if nothing matched.
+    """
+    if selected_4326.empty or candidate_iso_gdf is None:
+        return None
+    sel_ids = selected_4326["candidate_id"].astype(int).tolist()
+    matched = candidate_iso_gdf[candidate_iso_gdf.index.isin(sel_ids)]
+    if matched.empty:
+        return None
+    return matched.geometry.union_all()

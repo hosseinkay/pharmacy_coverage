@@ -938,20 +938,24 @@ def get_new_coverage_shape(selected_4326: gpd.GeoDataFrame, radius_miles: float)
     if cache_key in cache_store:
         return cache_store[cache_key]
 
-    # 2. Runtime computation via committed graphml -----------------------
-    _, graph_cached = _network_cache_available(radius_miles)
-    if graph_cached:
-        try:
-            place_name = get_osm_place_name(CITY_KEY)
-            if "osm_graph" not in st.session_state:
-                st.session_state["osm_graph"] = isochrones.get_network_graph_cached(place_name)
-            graph = st.session_state["osm_graph"]
-            geom = isochrones.compute_merged_isochrone(graph, selected_4326, radius_miles)
-            result = (geom, "Street-network isochrone")
-            cache_store[cache_key] = result
-            return result
-        except Exception:
-            pass
+    # 2. Per-candidate lookup (candidate_isochrones_r0.50.parquet, 168 KB) ---
+    # Indexed by candidate_id; contains ego_graph isochrones for each demo
+    # candidate.  Union whichever rows match the currently selected ids.
+    try:
+        place_name = get_osm_place_name(CITY_KEY)
+        if "candidate_iso_gdf" not in st.session_state:
+            st.session_state["candidate_iso_gdf"] = isochrones.get_candidate_isochrones(
+                place_name, radius_miles
+            )
+        cand_iso = st.session_state["candidate_iso_gdf"]
+        if cand_iso is not None:
+            geom = isochrones.isochrone_for_selected(cand_iso, selected_4326)
+            if geom is not None and not geom.is_empty:
+                result = (geom, "Street-network isochrone")
+                cache_store[cache_key] = result
+                return result
+    except Exception:
+        pass
 
     # 3. Straight-line buffer fallback -----------------------------------
     geom_3857 = cov_mod.merged_buffer(selected_4326, radius_miles)
