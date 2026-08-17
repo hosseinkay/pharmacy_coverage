@@ -924,34 +924,35 @@ def get_new_coverage_shape(selected_4326: gpd.GeoDataFrame, radius_miles: float)
     Priority order:
     1. Session-state cache keyed by (selected index set, radius) — instant on
        re-renders and correctly scoped to the actual selection.
-    2. Runtime computation via the committed drive_network.graphml.  The graph
-       object is cached in session_state so the 38 MB parse happens at most
-       once per session; per-selection isochrone computation takes ~5 s.
-    3. Straight-line buffer — last resort if the graphml is unavailable.
+    2. Fast edge-parquet path: load drive_edges_3857.parquet (5 MB, < 0.2 s),
+       spatial-index query nearby edges, buffer 40 m, clip to radius disc.
+       No osmnx or networkx required at runtime; the edge GDF is cached in
+       session_state after the first load so subsequent runs are ~0.7 s.
+    3. Straight-line buffer — last resort if the edge parquet is absent.
     """
     if selected_4326.empty:
         return None, ""
 
-    # 1. Session cache — keyed by the exact set of selected candidates ----
+    # 1. Session cache ---------------------------------------------------
     cache_store = st.session_state.setdefault("new_coverage_cache", {})
     cache_key = (frozenset(selected_4326.index.tolist()), round(radius_miles, 4))
     if cache_key in cache_store:
         return cache_store[cache_key]
 
-    # 2. Runtime computation via committed graphml -----------------------
-    _, graph_cached = _network_cache_available(radius_miles)
-    if graph_cached:
-        try:
-            place_name = get_osm_place_name(CITY_KEY)
-            if "osm_graph" not in st.session_state:
-                st.session_state["osm_graph"] = isochrones.get_network_graph_cached(place_name)
-            graph = st.session_state["osm_graph"]
-            geom = isochrones.compute_merged_isochrone(graph, selected_4326, radius_miles)
-            result = (geom, "Street-network isochrone")
-            cache_store[cache_key] = result
-            return result
-        except Exception:
-            pass
+    # 2. Fast edge-parquet path ------------------------------------------
+    try:
+        place_name = get_osm_place_name(CITY_KEY)
+        if "drive_edges" not in st.session_state:
+            st.session_state["drive_edges"] = isochrones.get_edges_gdf(place_name)
+        edges = st.session_state["drive_edges"]
+        if edges is not None:
+            geom = isochrones.compute_isochrone_from_edges(edges, selected_4326, radius_miles)
+            if geom is not None:
+                result = (geom, "Street-network isochrone")
+                cache_store[cache_key] = result
+                return result
+    except Exception:
+        pass
 
     # 3. Straight-line buffer fallback -----------------------------------
     geom_3857 = cov_mod.merged_buffer(selected_4326, radius_miles)

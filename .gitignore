@@ -38,6 +38,11 @@ __pycache__/
 # at 0.5 mi radius.  Committed so the blue coverage layer appears instantly
 # without loading the 38 MB drive network on the first render.
 !.cache/chicago-illinois-usa/demo_new_sites_isochrone_r0.50.parquet
-# Chicago drive network (OSMnx, 38 MB).  Committed so Streamlit Cloud can
-# compute street-network isochrones for re-runs with different settings.
+# Pre-projected street-edge GeoDataFrame (EPSG:3857, 5.4 MB).  Committed so
+# Streamlit Cloud can compute candidate-site isochrones via fast spatial
+# query (< 1 s) without loading the 38 MB graphml or importing osmnx at
+# runtime.  Regenerate with: scripts/precompute_isochrone.py
+!.cache/chicago-illinois-usa/drive_edges_3857.parquet
+# Chicago drive network (OSMnx, 38 MB) — kept for existing-pharmacy
+# isochrone computation (one-time local operation).
 !.cache/chicago-illinois-usa/drive_network.graphml
