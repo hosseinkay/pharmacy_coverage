@@ -34,7 +34,10 @@ __pycache__/
 # Pre-computed street-network isochrone for existing pharmacies (read-only,
 # generated once — regenerate with scripts/precompute_isochrone.py).
 !.cache/chicago-illinois-usa/existing_isochrone_r0.50.parquet
+# Pre-computed isochrone for the DEFAULT 10 selected demo candidate sites
+# at 0.5 mi radius.  Committed so the blue coverage layer appears instantly
+# without loading the 38 MB drive network on the first render.
+!.cache/chicago-illinois-usa/demo_new_sites_isochrone_r0.50.parquet
 # Chicago drive network (OSMnx, 38 MB).  Committed so Streamlit Cloud can
-# compute street-network isochrones for newly selected candidate sites at
-# runtime without an outbound OSM download on every deploy.
+# compute street-network isochrones for re-runs with different settings.
 !.cache/chicago-illinois-usa/drive_network.graphml
