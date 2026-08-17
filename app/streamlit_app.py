@@ -592,41 +592,31 @@ st.markdown(
     hr { border-color: var(--border) !important; margin: 1.5rem 0 !important; }
 
     /* ── How-it-works step cards (hero intro) ────────────────────── */
-    .ph-hiw-grid {
-      display: grid !important;
-      grid-template-columns: repeat(3, 1fr) !important;
-      gap: 1rem !important;
-      margin: 0 0 2.5rem !important;
+    /* ── Narrative pullquote + map lead-in ──────────────────────── */
+    .ph-pullquote {
+      font-family: var(--font-d) !important;
+      font-size: 1.75rem !important;
+      font-weight: 600 !important;
+      color: var(--fg) !important;
+      border-left: 4px solid var(--accent) !important;
+      padding: 0.35rem 0 0.35rem 1.2rem !important;
+      margin: 1.4rem 0 1.1rem !important;
+      line-height: 1.25 !important;
+      letter-spacing: -0.01em !important;
     }
-    .ph-hiw-card {
+    .ph-map-lead {
       background: var(--bg-e) !important;
       border: 1px solid var(--border) !important;
-      border-radius: var(--r) !important;
-      padding: 1.3rem 1.4rem !important;
-      display: flex !important;
-      flex-direction: column !important;
-      gap: 0.5rem !important;
+      border-left: 3px solid var(--accent) !important;
+      border-radius: 0 var(--r) var(--r) 0 !important;
+      padding: 0.9rem 1.25rem !important;
+      margin: 1.1rem 0 1.5rem !important;
     }
-    .ph-hiw-num {
-      font-family: var(--font-d) !important;
-      font-size: 0.68rem !important;
-      font-weight: 500 !important;
-      letter-spacing: 0.28em !important;
-      text-transform: uppercase !important;
-      color: var(--accent) !important;
-    }
-    .ph-hiw-title {
-      font-family: var(--font-d) !important;
-      font-size: 1.05rem !important;
-      font-weight: 500 !important;
-      color: var(--fg) !important;
-      line-height: 1.25 !important;
-    }
-    .ph-hiw-body {
+    .ph-map-lead p {
       font-family: var(--font-b) !important;
-      font-size: 0.85rem !important;
-      line-height: 1.65 !important;
+      font-size: 0.9rem !important;
       color: var(--fg-m) !important;
+      line-height: 1.65 !important;
       margin: 0 !important;
     }
 
@@ -768,9 +758,9 @@ def add_filled_geometry(m, geom_4326, color, opacity, tooltip):
     folium.GeoJson(
         {"type": "Feature", "geometry": geom_4326.__geo_interface__, "properties": {}},
         style_function=lambda _f, c=color, o=opacity: {
-            "fillColor": c, "color": c, "weight": 1.2, "fillOpacity": o,
+            "fillColor": c, "color": c, "weight": 2.0, "fillOpacity": o,
         },
-        tooltip=tooltip,
+        tooltip=folium.Tooltip(tooltip),
     ).add_to(m)
 
 
@@ -995,43 +985,33 @@ elif "prepared_default" not in st.session_state and st.session_state.get("prepar
 # ---------------------------------------------------------------------------
 st.markdown(
     """
-    <div style="padding: 0.5rem 0 1.25rem;">
+    <div style="padding: 0.5rem 0 0.5rem;">
       <span class="ph-eyebrow">Chicago &middot; Pharmacy Access Planning</span>
       <h1 class="ph-hero-title">Chicago Pharmacy<br>Desert Planner</h1>
       <p class="ph-hero-body">
         Pharmacy deserts are areas where getting to a pharmacy is difficult enough
-        that routine access to prescriptions becomes a real problem.
-        <strong>Chicago is one of the largest cities where that gap shows up clearly
-        across neighborhoods.</strong> Here&rsquo;s how this tool approaches the question.
+        that routine access to prescriptions becomes a real problem. Chicago is one
+        of the largest cities where that gap can vary dramatically from one
+        neighborhood to another.
       </p>
-    </div>
-    <div class="ph-hiw-grid">
-      <div class="ph-hiw-card">
-        <span class="ph-hiw-num">Step 01</span>
-        <span class="ph-hiw-title">Map the baseline</span>
-        <p class="ph-hiw-body">
-          Start with every pharmacy in Chicago and measure how much of the city
-          falls within a ~10-minute walk. This reveals where access is already
-          strong &mdash; and where it starts to fall off.
-        </p>
-      </div>
-      <div class="ph-hiw-card">
-        <span class="ph-hiw-num">Step 02</span>
-        <span class="ph-hiw-title">Layer in health &amp; demographic data</span>
-        <p class="ph-hiw-body">
-          Bring in vehicle access, poverty rates, chronic disease burden, age,
-          and mobility data to understand <em>who</em> is affected &mdash; and
-          where limited access matters most.
-        </p>
-      </div>
-      <div class="ph-hiw-card">
-        <span class="ph-hiw-num">Step 03</span>
-        <span class="ph-hiw-title">Find the highest-impact sites</span>
-        <p class="ph-hiw-body">
-          Run a coverage optimization across thousands of candidate locations to
-          identify where new pharmacies would reach the most high-need residents
-          with the fewest new sites.
-        </p>
+      <div class="ph-pullquote">So how big is the problem?</div>
+      <p class="ph-hero-body">
+        A good place to start is simply by looking at where every pharmacy in Chicago
+        is today and asking how much of the city is actually within a reasonable
+        walking distance. Here, that means about a 10-minute walk along the street
+        network.
+      </p>
+      <p class="ph-hero-body" style="margin-top:0.85rem !important;">
+        But distance alone only tells part of the story. Limited pharmacy access
+        matters differently in a neighborhood where most households have a car than
+        it does in one where many do not. The same is true for communities with
+        higher poverty, older populations, mobility limitations, or greater rates
+        of conditions that require regular prescriptions.
+      </p>
+      <div class="ph-map-lead">
+        <p>The map below brings those pieces together to show where pharmacy access
+        is already strong, where it falls off, and where limited access overlaps
+        with greater community need.</p>
       </div>
     </div>
     """,
@@ -1104,7 +1084,7 @@ with st.container(border=True):
                 tooltip=folium.Tooltip("Existing pharmacy"),
             ).add_to(m_preview)
 
-        st_folium(m_preview, height=500, use_container_width=True, returned_objects=[])
+        st_folium(m_preview, height=500, use_container_width=True, returned_objects=[], key="map_section01")
         st.caption("Teal dots = ~850 existing pharmacies. Hover any tract for details.")
     else:
         st.info("Map loading — if this persists, reload the page.", icon="🗺️")
@@ -1419,13 +1399,21 @@ with _results_slot.container():
             )
             new_shape, new_status = get_new_coverage_shape(selected, _result_radius)
 
-        # Compute new-only shape (difference of new union minus existing)
+        # Compute new-only shape (difference of new union minus existing).
+        # Falls back to the full new_shape if the difference is empty (can happen
+        # when all selected sites are geometrically inside the existing coverage
+        # zone, which means the optimizer found high-need areas that happen to be
+        # near an existing pharmacy — still worth showing).
         new_only = None
         if new_shape is not None:
             if existing_shape is not None:
-                ns3 = gpd.GeoSeries([new_shape], crs="EPSG:4326").to_crs(cov_mod.PROJECTED_CRS).iloc[0]
-                es3 = gpd.GeoSeries([existing_shape], crs="EPSG:4326").to_crs(cov_mod.PROJECTED_CRS).iloc[0]
-                new_only = to_wgs84(ns3.difference(es3))
+                try:
+                    ns3 = gpd.GeoSeries([new_shape], crs="EPSG:4326").to_crs(cov_mod.PROJECTED_CRS).iloc[0]
+                    es3 = gpd.GeoSeries([existing_shape], crs="EPSG:4326").to_crs(cov_mod.PROJECTED_CRS).iloc[0]
+                    diff = ns3.difference(es3)
+                    new_only = to_wgs84(diff) if not diff.is_empty else new_shape
+                except Exception:
+                    new_only = new_shape
             else:
                 new_only = new_shape
 
@@ -1459,7 +1447,7 @@ with _results_slot.container():
             gain_choropleth_layer(tract_res, gain_tooltip_cols).add_to(m)
             GAIN_COLORMAP.add_to(m)
             _add_selected_markers(m)
-            st_folium(m, height=560, use_container_width=True, returned_objects=[])
+            st_folium(m, height=560, use_container_width=True, returned_objects=[], key="map_result_gain")
             st.caption(
                 "Teal intensity = coverage gained per tract (percentage points). "
                 "Numbered markers = selected pharmacy sites. Hover any tract or marker for details."
@@ -1468,8 +1456,8 @@ with _results_slot.container():
         elif map_view == "Existing coverage only":
             need_choropleth_layer(tract_res, tooltip_cols).add_to(m)
             NEED_COLORMAP.add_to(m)
-            add_filled_geometry(m, existing_shape, color="#4ade80", opacity=0.40, tooltip="Existing coverage")
-            st_folium(m, height=560, use_container_width=True, returned_objects=[])
+            add_filled_geometry(m, existing_shape, color="#4ade80", opacity=0.45, tooltip="Existing coverage")
+            st_folium(m, height=560, use_container_width=True, returned_objects=[], key="map_result_existing")
             st.caption(
                 f"Baseline view: Pharmacy Need Index choropleth + existing coverage ({existing_status}). "
                 "No new sites shown — use 'After optimization' to see recommendations."
@@ -1487,14 +1475,14 @@ with _results_slot.container():
                     ),
                     tooltip=folium.GeoJsonTooltip(fields=["label"]),
                 ).add_to(m)
-            add_filled_geometry(m, existing_shape, color="#4ade80", opacity=0.40, tooltip="Existing coverage")
+            add_filled_geometry(m, existing_shape, color="#4ade80", opacity=0.45, tooltip="Existing coverage")
             if new_only is not None:
                 add_filled_geometry(
-                    m, new_only, color="#38bdf8", opacity=0.60,
+                    m, new_only, color="#38bdf8", opacity=0.65,
                     tooltip="Newly covered by selected sites",
                 )
             _add_selected_markers(m)
-            st_folium(m, height=560, use_container_width=True, returned_objects=[])
+            st_folium(m, height=560, use_container_width=True, returned_objects=[], key="map_result_after_opt")
             st.caption(
                 "Green: existing pharmacy coverage. Blue: area newly covered by the selected sites. "
                 "Hover a numbered marker for site details."
