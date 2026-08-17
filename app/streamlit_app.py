@@ -1399,13 +1399,23 @@ with _results_slot.container():
             )
             new_shape, new_status = get_new_coverage_shape(selected, _result_radius)
 
-        # Blue coverage shape: full service-radius buffer of the selected new sites.
-        # We no longer compute the difference against existing coverage because
-        # that subtraction produces near-invisible slivers when optimised sites
-        # are placed near (but still outside) the existing isochrone boundary.
-        # Showing the full buffer for ≤ 30 sites is trivially simple for Leaflet
-        # and makes the proposed impact area clearly visible.
-        new_only = new_shape  # None when selected is empty
+        # Compute new-only shape (difference of new union minus existing).
+        # Falls back to the full new_shape if the difference is empty (can happen
+        # when all selected sites are geometrically inside the existing coverage
+        # zone, which means the optimizer found high-need areas that happen to be
+        # near an existing pharmacy — still worth showing).
+        new_only = None
+        if new_shape is not None:
+            if existing_shape is not None:
+                try:
+                    ns3 = gpd.GeoSeries([new_shape], crs="EPSG:4326").to_crs(cov_mod.PROJECTED_CRS).iloc[0]
+                    es3 = gpd.GeoSeries([existing_shape], crs="EPSG:4326").to_crs(cov_mod.PROJECTED_CRS).iloc[0]
+                    diff = ns3.difference(es3)
+                    new_only = to_wgs84(diff) if not diff.is_empty else new_shape
+                except Exception:
+                    new_only = new_shape
+            else:
+                new_only = new_shape
 
         def _add_selected_markers(folium_map) -> None:
             for _, row in selected.iterrows():
