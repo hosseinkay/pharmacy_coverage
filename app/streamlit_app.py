@@ -1028,6 +1028,14 @@ elif "prepared_default" not in st.session_state and st.session_state.get("prepar
     st.session_state["prepared_default"] = st.session_state.get("prepared")
 
 # ---------------------------------------------------------------------------
+# Tab layout — Planner (main interactive flow) + Methodology (deep reference)
+# ---------------------------------------------------------------------------
+_planner_tab, _method_tab = st.tabs(
+    ["🗺️  Planner", "📐  Methodology & Model Design"]
+)
+_planner_tab.__enter__()
+
+# ---------------------------------------------------------------------------
 # 01 · Hero
 # ---------------------------------------------------------------------------
 st.markdown(
@@ -1722,177 +1730,393 @@ if result is not None:
                 }))
 
 # ---------------------------------------------------------------------------
-# Methodology & data quality (always available at the bottom)
+# Methodology overview (concise — full reference in the Methodology tab)
 # ---------------------------------------------------------------------------
 st.divider()
-with st.expander("Methodology, data sources & assumptions"):
+with st.expander("Methodology, data sources & assumptions", expanded=False):
     section_header("", "Pharmacy Need Index")
     st.markdown(
-        "The index measures **medication-access burden**, not general health status. "
-        "Each factor is **percentile-ranked within Chicago's tracts** before combining — "
-        "so a vehicle-ownership percentage, a disease prevalence rate, and a poverty rate "
-        "(different units, different scales) become comparable:"
+        "Six factors, each **percentile-ranked across Chicago's 801 census tracts** before "
+        "combining — so vehicle ownership (%), disease prevalence (%), and poverty rate (%) "
+        "become directly comparable. The result is scaled by tract population:"
     )
     render_dark_table(pd.DataFrame([
-        ("No vehicle access",                   "ACS B08201",  "28%", "Primary transportation barrier"),
-        ("Poverty rate",                        "ACS B17001",  "22%", "Economic vulnerability"),
-        ("Chronic medication burden",           "CDC PLACES",  "20%", "Diabetes + hypertension: conditions requiring ongoing prescriptions"),
-        ("Age 65+",                             "ACS DP05",    "13%", "Older adults have higher prescription volume"),
-        ("Mobility / ambulatory disability",    "ACS S1810",   "12%", "Physical barrier to reaching a pharmacy"),
-        ("Uninsured rate",                      "ACS DP03",    " 5%", "Financial barrier; weighted low — weaker pharmacy-specific predictor"),
+        ("No vehicle access",                   "ACS B08201", "28%", "Primary transportation barrier"),
+        ("Poverty rate",                        "ACS B17001", "22%", "Economic vulnerability"),
+        ("Chronic medication burden",           "CDC PLACES", "20%", "Diabetes + hypertension prevalence"),
+        ("Age 65+",                             "ACS DP05",   "13%", "Higher prescription volume"),
+        ("Mobility / ambulatory disability",    "ACS S1810",  "12%", "Physical barrier to reaching pharmacy"),
+        ("Uninsured rate",                      "ACS DP03",   " 5%", "Financial barrier (weakest pharmacy predictor)"),
     ], columns=["Factor", "Source", "Default weight", "Rationale"]))
     st.markdown(
-        "**Formula:** `PNI(tract) = Population × Σ( percentile_rank(factor_i) × weight_i )`  \n"
-        "The population-scaled `weighted_need` goes directly into the optimizer. "
-        "The `normalized_need` (0–100 display scale) is computed afterward for map coloring only — "
-        "it is never fed back into the optimization."
+        "**Formula:** `PNI(tract) = Population × Σ( percentile_rank(factor_i) × weight_i ) / W`  \n"
+        "where *W* = sum of weights for available factors. "
+        "The 0–100 display scale used for map coloring is computed afterward — "
+        "it is never fed back into the optimizer."
     )
 
-    section_header("", "Greedy Max-Coverage Algorithm")
+    section_header("", "Location Optimizer")
     st.markdown(
-        "The optimizer solves the **Weighted Maximum Coverage Location Problem (WMCLP)** "
-        "— the standard operations research formulation for this class of siting decision.\n\n"
-        "A greedy approach with marginal discounting achieves a provable **1−1/e ≈ 63% "
-        "optimality guarantee** (from the submodularity of coverage functions), "
-        "is deterministic, and runs in seconds on Chicago-sized data:\n\n"
-        "1. Initialize `remaining_need[tract] = need_score × (1 − existing_coverage)`\n"
-        "2. For each pick: choose the candidate with highest `Σ remaining_need[tract] × coverage_fraction(candidate, tract)`\n"
-        "3. Update: `remaining_need[tract] ×= (1 − coverage_fraction(selected, tract))`\n"
-        "4. Repeat until `num_pharmacies` sites selected\n\n"
-        "The original CMU project used an epsilon-greedy \"Multi-Armed Bandit\" that computed "
-        "each candidate's reward once before any selection — equivalent to sorting by static "
-        "reward. Picking candidate #2 never accounted for what candidate #1 already covered. "
-        "This rebuild fixes that by recomputing marginal gain after every selection."
+        "Greedy weighted maximum coverage — picks sites one at a time, each time choosing "
+        "the candidate that covers the most remaining unmet need. Marginal gains are "
+        "recomputed after every selection, so earlier picks properly discount later ones.\n\n"
+        "Coverage fractions use fast Euclidean buffers for scoring thousands of candidates; "
+        "the final map shows real drive-network isochrones for selected sites.\n\n"
+        "**Race/ethnicity** is never an optimization input — it is reported after the fact only. "
+        "**Opportunity Zones** act as an eligibility constraint applied before scoring, not a reward signal."
     )
 
-    section_header("", "Deliberate Design Choices")
+    st.info(
+        "Want to see exactly how the model works? The **Methodology & Model Design** tab "
+        "includes the full optimization formulation, algorithm pseudocode, approximation "
+        "guarantee, all data sources, analytical assumptions, and deliberate design decisions.",
+        icon="📐",
+    )
+
+_planner_tab.__exit__(None, None, None)
+
+# ---------------------------------------------------------------------------
+# Methodology & Model Design tab — full technical reference
+# ---------------------------------------------------------------------------
+with _method_tab:
+    st.markdown(
+        """
+        <div style="padding: 0.5rem 0 1.5rem;">
+          <span class="ph-eyebrow">Technical Reference</span>
+          <h1 class="ph-hero-title" style="font-size:2rem">Methodology &amp; Model Design</h1>
+          <p class="ph-hero-body">
+            A full account of every modelling decision — the problem formulation,
+            algorithm, data sources, design trade-offs, and known limitations.
+            Written for a technical audience.
+          </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── 1. How the model works ────────────────────────────────────────────────
+    section_header("1", "How the model works")
+    st.markdown(
+        "The model answers a single question: *given a fixed budget of new pharmacy "
+        "locations, which sites serve the most people who need them most?*\n\n"
+        "It has two stages:\n\n"
+        "1. **Score every census tract** by how badly it needs another pharmacy — "
+        "a composite of six socioeconomic and health factors, each percentile-ranked "
+        "so different units become comparable, then scaled by population.\n\n"
+        "2. **Select sites greedily** — starting from nothing, pick one candidate at a "
+        "time: whichever site covers the most remaining unmet need. Repeat until the "
+        "requested number of sites is reached."
+    )
+
+    # ── 2. Pharmacy Need Index ────────────────────────────────────────────────
+    st.divider()
+    section_header("2", "Pharmacy Need Index (PNI)")
+
+    st.markdown(
+        "The index measures **medication-access burden**, not general health status. "
+        "Each of the six factors is **percentile-ranked within Chicago's 801 census tracts** "
+        "before combining — so a vehicle-ownership percentage, a disease prevalence, "
+        "and a poverty rate (different units, different scales) all become 0–1 scores "
+        "measuring relative disadvantage within the city."
+    )
+
+    render_dark_table(pd.DataFrame([
+        ("No vehicle access",                   "ACS B08201",  "28%",
+         "Primary transportation barrier — households without a car face a hard distance cutoff"),
+        ("Poverty rate",                        "ACS B17001",  "22%",
+         "Economic vulnerability — reduced ability to pay for transport or OTC alternatives"),
+        ("Chronic medication burden",           "CDC PLACES",  "20%",
+         "Diabetes + hypertension prevalence: conditions requiring monthly prescription refills"),
+        ("Age 65+",                             "ACS DP05",    "13%",
+         "Older adults fill ~3× more prescriptions than working-age adults"),
+        ("Mobility / ambulatory disability",    "ACS S1810",   "12%",
+         "Physical barrier — ambulatory difficulty makes a long walk to a pharmacy prohibitive"),
+        ("Uninsured rate",                      "ACS DP03",    " 5%",
+         "Financial barrier, but weighted low: uninsured residents still need pharmacies"),
+    ], columns=["Factor", "Source", "Default weight", "Rationale"]))
+
+    st.markdown(
+        r"""
+**Formula**
+
+$$\text{PNI}_i = P_i \times \frac{1}{W} \sum_k \bigl( w_k \times r_{ik} \bigr)$$
+
+where:
+- $P_i$ = total population of tract $i$
+- $r_{ik}$ = percentile rank of tract $i$ on factor $k$ (0 = lowest need, 1 = highest)
+- $w_k$ = user-configured weight for factor $k$
+- $W = \sum_k w_k$ over factors that are actually available (graceful degradation when a data source is absent)
+
+The result `weighted_need_i` is fed directly into the optimizer.
+The 0–100 display value shown on the map (`normalized_need`) is computed afterward:
+`normalized_need_i = 100 × weighted_need_i / max(weighted_need)`.
+It is never used in optimization.
+        """
+    )
+
+    # ── 3. Location optimization ──────────────────────────────────────────────
+    st.divider()
+    section_header("3", "Location Optimization")
+
+    subsection_header("Objective function")
+    st.markdown(
+        r"""
+The model solves the **Weighted Maximum Coverage Location Problem (WMCLP)**:
+
+$$\max_{S \subseteq C,\; |S| = K} \sum_{i \in T} u_i \cdot \mathbf{1}\!\left[\text{tract } i \text{ is covered by } S\right]$$
+
+where:
+- $T$ = set of census tracts, $C$ = set of candidate sites, $K$ = requested new pharmacies
+- $u_i = N_i \times (1 - e_i)$ = **unmet need** of tract $i$:
+  - $N_i$ = `weighted_need_i` = PNI score (population-scaled)
+  - $e_i$ = existing coverage fraction of tract $i$ before any new sites
+- Coverage is **fractional** (a continuous relaxation): a candidate partially overlapping a tract
+  covers that fraction of the tract's unmet need
+
+The fractional objective is submodular and monotone, which enables the greedy algorithm's guarantee.
+        """
+    )
+
+    subsection_header("Greedy algorithm")
+    st.markdown(
+        "A greedy algorithm with **multiplicative marginal discounting** solves the problem "
+        "in seconds on Chicago-sized data and is fully deterministic:"
+    )
+    st.code(
+        """\
+# Initialization
+remaining_need[tract] = weighted_need[tract] × (1 − existing_coverage[tract])
+
+# Greedy loop — one site per iteration
+for pick in range(K):
+    # Score every un-selected candidate
+    for candidate in candidates − selected:
+        # Skip if too close to an already-selected site
+        if min_distance(candidate, selected) < spacing_threshold:
+            continue
+        gain[candidate] = Σ_tract  remaining_need[tract] × coverage_frac(candidate, tract)
+
+    # Select the highest-gain candidate
+    best = argmax(gain)
+    selected.add(best)
+
+    # Discount remaining need for newly covered tracts
+    for tract, frac in coverage_frac(best, *):
+        remaining_need[tract] ×= (1 − frac)
+""",
+        language="python",
+    )
+
+    subsection_header("Approximation guarantee")
+    st.markdown(
+        "The greedy algorithm for submodular maximization over a uniform cardinality constraint "
+        "achieves a worst-case **1−1/e ≈ 63% optimality guarantee** — meaning the greedy "
+        "solution is always at least 63% as good as the true optimum.\n\n"
+        "This model adds a **minimum-spacing constraint** (candidates must be at least "
+        "`desert_radius_miles` apart) to prevent the optimizer from clustering all sites "
+        "in one high-need neighborhood. This constraint is beyond the formal guarantee's "
+        "assumptions. In practice on Chicago-sized data the spacing constraint rarely "
+        "binds — most high-need tracts are geographically distributed — and the greedy "
+        "solution closely approximates the unconstrained optimum."
+    )
+
+    subsection_header("Coverage fractions")
+    st.markdown(
+        "Coverage is computed as the **fraction of a tract's residential land area** that "
+        "falls within the access radius of a candidate site (Euclidean buffer, not network "
+        "distance). This is fast enough to score thousands of candidates across 801 tracts "
+        "in under a second.\n\n"
+        "When *'Use 2020 Census block population'* is enabled, each block's population "
+        "replaces the area proxy: coverage becomes the share of block-level population "
+        "within radius, weighted by population. This requires a Census API key and is "
+        "slower but more accurate in tracts with irregular residential density.\n\n"
+        "**Coverage and isochrones are intentionally separate:**  \n"
+        "Scoring uses fast Euclidean buffers. Visualization uses real street-network "
+        "isochrones (drive network, 40 m buffer around reachable road edges). "
+        "The isochrones shown on the final map are pre-computed for all candidate sites "
+        "and loaded by coordinate key — they are never used as scoring inputs."
+    )
+
+    # ── 4. Siting constraints ─────────────────────────────────────────────────
+    st.divider()
+    section_header("4", "Siting Constraints")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(
+            "**Minimum spacing**  \n"
+            "Each new site must be at least `desert_radius_miles` (Euclidean distance) "
+            "from every already-selected site. This prevents the optimizer from stacking "
+            "all picks in a single dense high-need cluster, which would saturate one "
+            "neighborhood while leaving others uncovered.\n\n"
+            "**Candidate generation**  \n"
+            "Candidates are programmatically generated on a regular grid (default 200 m "
+            "spacing) clipped to residential and commercial land use from OpenStreetMap. "
+            "Points within one access radius of an existing pharmacy are excluded before "
+            "scoring — adding a pharmacy right next to an existing one provides no new coverage."
+        )
+    with col2:
+        st.markdown(
+            "**Opportunity Zone filter (opt-in)**  \n"
+            "When enabled, all candidate sites outside federally designated "
+            "Opportunity Zone tracts are removed from the pool *before* any scoring. "
+            "OZ status never appears in the need index — the constraint is on "
+            "*eligibility*, not on *desirability*. The optimizer still maximizes "
+            "need coverage; it simply can only choose from the OZ-eligible subset.\n\n"
+            "**Interpretation**: OZ filtering answers the question *'where should we "
+            "build if we also want to attract tax-incentivized capital?'*, not *'where "
+            "is need highest?'* The two questions often have different answers."
+        )
+
+    # ── 5. Deliberate design choices ─────────────────────────────────────────
+    st.divider()
+    section_header("5", "Deliberate Design Choices")
+
     col_a, col_b = st.columns(2)
     with col_a:
         st.markdown(
             "**Race/ethnicity: reported, never scored**  \n"
-            "The equity check shows what share of newly covered residents live in "
-            "majority-Black or majority-Hispanic/Latino tracts — a post-hoc observation, "
-            "not an optimization input. The same equity outcomes emerge naturally from "
-            "socioeconomic factors without making race a variable the optimizer can chase.\n\n"
-            "**Opportunity Zones: constraint, not reward**  \n"
-            "When OZ filtering is enabled, candidates outside designated tracts are removed "
-            "from the pool before scoring. OZ status never appears in the need index — "
-            "the constraint is on *eligibility*, not on *desirability*."
+            "The equity section shows what share of newly covered residents live in "
+            "majority-Black or majority-Hispanic/Latino tracts — a post-hoc observation "
+            "reported after the optimizer has already made its selections, not an input "
+            "to the optimization. The same equity outcomes emerge naturally from the "
+            "socioeconomic factors without making race a variable the algorithm can "
+            "directly chase. This is the methodologically correct separation: the optimizer "
+            "maximizes coverage of need; the equity audit checks who benefited.\n\n"
+            "**Narrow variable set**  \n"
+            "Obesity, smoking, depression, asthma, COPD, high cholesterol, dental visits, "
+            "and vision disability are all available in CDC PLACES but deliberately "
+            "excluded. They don't reliably predict *recurring pharmacy need* the way "
+            "diabetes and hypertension do — conditions that require monthly prescription "
+            "refills. Adding correlated variables adds noise without improving signal."
         )
     with col_b:
         st.markdown(
-            "**Narrow variable set**  \n"
-            "Obesity, smoking, depression, asthma, COPD, high cholesterol, dental visits, "
-            "and vision disability are deliberately excluded. CDC PLACES publishes all of "
-            "these, but they don't reliably predict *recurring pharmacy need* the way "
-            "diabetes and hypertension do. More variables add noise, not signal.\n\n"
-            "**Coverage via buffers, visualized via isochrones**  \n"
-            "Scoring thousands of candidates with real street-network isochrones isn't "
-            "practical at scale. The optimizer uses fast Euclidean buffers for candidate "
-            "scoring; the final map shows actual drive-network isochrones for the selected "
-            "sites and existing pharmacies."
+            "**Opportunity Zones: constraint, not reward**  \n"
+            "See §4. OZ status is never in the need index — only ever an eligibility gate.\n\n"
+            "**Percentile ranking before combining**  \n"
+            "Without ranking, a factor measured as a percentage (0–100%) and one "
+            "measured as a count (0–5,000 people) would produce wildly incomparable "
+            "values, and whichever happened to have larger raw numbers would dominate "
+            "the index. Percentile ranking maps every factor to [0, 1] regardless of "
+            "original units or scale, so weights become meaningful.\n\n"
+            "**Buffers for speed, isochrones for presentation**  \n"
+            "A 0.5-mile Euclidean buffer is a good proxy for a 10-minute walk in a "
+            "grid-plan city like Chicago. Computing real street-network isochrones for "
+            "7,283 candidate sites would take 30+ minutes; buffers take under a second. "
+            "The final visualization uses pre-computed drive-network isochrones for the "
+            "selected sites only — the map shows what the selected sites actually cover, "
+            "while the optimizer used buffers to find them."
         )
 
-    section_header("", "Data Sources & Freshness")
+    # ── 6. How the model changed ──────────────────────────────────────────────
+    st.divider()
+    section_header("6", "How the Model Evolved")
+    with st.expander("Comparison with the original CMU project", expanded=False):
+        st.markdown(
+            "This is a from-scratch rebuild of a CMU group project "
+            "(*Pharmacy Deserts in Chicago*, Fall 2023). The original work identified "
+            "the problem correctly and used real commercial real-estate listings as "
+            "candidate sites. This rebuild changes several methodological choices:\n\n"
+            "| Dimension | Original (CMU) | This rebuild |\n"
+            "|---|---|---|\n"
+            "| Candidate sites | Manual LoopNet CSV export | Programmatic OSM grid — reproducible for any city |\n"
+            "| Site selection | Epsilon-greedy Multi-Armed Bandit (static reward) | Greedy max-coverage with marginal discounting |\n"
+            "| Marginal coverage | Not recomputed after each pick | Recomputed after every selection via multiplicative update |\n"
+            "| Coverage metric | Proximity score (distance-based) | Fractional tract coverage (area or population) |\n"
+            "| Need index | Weighted sum of raw values | Percentile-ranked factors — units-independent |\n"
+            "| Equity | Not reported | Post-hoc audit; never a scoring input |\n"
+            "| Multi-city | Chicago-specific hardcoding | City-agnostic pipeline with per-city data interface |\n\n"
+            "**Why epsilon-greedy is wrong here:**  \n"
+            "The original approach computed each candidate's coverage score once, "
+            "then picked the top-N. This is equivalent to independent greedy selection "
+            "with no memory — candidate #2 doesn't know candidate #1 was already selected. "
+            "In coverage problems, the value of a site *depends on what else is selected* "
+            "(a site covering the same tracts as an already-selected site has zero marginal value). "
+            "Recomputing marginal gain after every pick is the correct approach and "
+            "gives the provable 1−1/e guarantee."
+        )
+
+    # ── 7. Data sources ───────────────────────────────────────────────────────
+    st.divider()
+    section_header("7", "Data Sources & Freshness")
     st.markdown(
-        "Every data layer used in this analysis is open and publicly reproducible. "
-        "The table below lists each source, what it powers, its vintage, and how it is accessed."
+        "Every data layer is open and publicly reproducible. "
+        "No proprietary data, no manual collection beyond the original pharmacy CSV."
     )
     render_dark_table(pd.DataFrame([
-        ("CDC PLACES (2023)",
-         "Chronic medication burden factor (diabetes + hypertension prevalence)",
+        ("CDC PLACES (2023 release)",
+         "Chronic medication burden — diabetes + hypertension tract-level prevalence",
          "2021 model year",
          "Annual",
-         "Socrata API — `data.cdc.gov` · local CSV fallback for Chicago"),
+         "Socrata API · data.cdc.gov · local CSV fallback for Chicago"),
         ("Census ACS 5-Year (2022)",
-         "5 need factors: vehicle access, poverty, age 65+, mobility, uninsured; race/ethnicity for equity reporting",
-         "2018–2022 survey",
+         "Five need factors: vehicle access, poverty, age 65+, mobility, uninsured; race/ethnicity for equity audit",
+         "2018–2022 survey pool",
          "Annual",
-         "Census API — requires `CENSUS_API_KEY`; graceful fallback to PLACES-only if absent"),
-        ("TIGERweb — 2020 Tracts",
-         "Census tract boundaries (geometry for all spatial joins)",
+         "Census API (CENSUS_API_KEY) · graceful PLACES-only fallback if absent"),
+        ("TIGERweb 2020 Tract Boundaries",
+         "Tract geometries for all spatial joins",
          "2020 decennial",
-         "Fixed (2020 geographies)",
-         "Census TIGERweb REST — `tigerweb.geo.census.gov`; disk-cached after first load"),
+         "Fixed (2020 census geography)",
+         "Census TIGERweb REST · tigerweb.geo.census.gov · disk-cached"),
         ("HUD Opportunity Zones",
-         "OZ eligibility filter (removes non-OZ candidates when enabled)",
+         "OZ eligibility filter — which tracts are federally designated",
          "2018 designation",
-         "Fixed (2017 TCJA, no subsequent amendments)",
-         "HUD ArcGIS REST — `services.arcgis.com`"),
+         "Fixed (2017 TCJA designation, no amendments)",
+         "HUD ArcGIS REST · services.arcgis.com"),
         ("OpenStreetMap",
-         "Existing pharmacy locations; residential/commercial land for candidate generation",
-         "Live snapshot",
-         "Crowdsourced (continuous)",
-         "osmnx + Overpass API; disk-cached per city after first fetch"),
+         "Existing pharmacy locations; residential/commercial land for candidate grid",
+         "Live crowdsourced snapshot",
+         "Continuous",
+         "osmnx + Overpass API · disk-cached per city after first fetch"),
         ("2020 Census Blocks",
          "Block-level population for population-weighted coverage (opt-in)",
          "2020 decennial",
          "Fixed",
-         "Census API — requires `CENSUS_API_KEY`; only fetched when option is enabled"),
+         "Census API · only fetched when option is enabled"),
         ("Chicago Data Portal",
-         "77 community area boundaries for community impact rollup",
+         "77 community area boundaries for community impact table",
          "Fixed (official city boundaries)",
          "Rarely changes",
-         "Public GeoJSON endpoint — `data.cityofchicago.org`"),
-    ], columns=["Source", "Powers", "Vintage", "Update freq.", "Access"]))
+         "Public GeoJSON · data.cityofchicago.org"),
+    ], columns=["Source", "Powers in this model", "Vintage", "Update frequency", "Access method"]))
 
-    # Dynamic cache status — two slug conventions:
-    # osm_place_name slug ("chicago-illinois-usa") for OSM-fetched layers
-    # city_key slug ("chicago") for API-fetched layers (ACS, blocks, OZ, community areas)
-    cache_dir = cache_mod.CACHE_DIR
-    has_api_key = bool(acs.get_census_api_key())
+    # ── 8. Assumptions & data quality ────────────────────────────────────────
+    st.divider()
+    section_header("8", "Assumptions & Data Quality")
 
-    osm_slug = cache_mod.slugify("Chicago, Illinois, USA")   # "chicago-illinois-usa"
-    key_slug = cache_mod.slugify(CITY_KEY)                   # "chicago"
-    cache_files = {
-        "OSM land use (zoned land)": f"{osm_slug}/zoned_land.parquet",
-        "OSM pharmacies": f"{osm_slug}/pharmacies.parquet",
-        "ACS need factors": f"{key_slug}/acs_need_factors.parquet",
-        "Census block population": f"{key_slug}/census_blocks.parquet",
-        "Opportunity Zone tracts": f"{key_slug}/opportunity_zone_tracts.parquet",
-        "Community areas (Chicago)": f"{key_slug}/community_areas.parquet",
-    }
-
-    status_rows = []
-    for label, rel_path in cache_files.items():
-        p = cache_dir / rel_path
-        if p.exists():
-            mtime = datetime.datetime.fromtimestamp(p.stat().st_mtime)
-            status_rows.append((label, "✓ Cached", mtime.strftime("%Y-%m-%d %H:%M")))
-        else:
-            status_rows.append((label, "Will fetch on first use", "—"))
-
-    subsection_header("Local cache status")
-    st.caption(
-        f"Data layers below are disk-cached in `pharmacy-desert-app/.cache/` after their first fetch. "
-        f"Census API key: {'configured ✓' if has_api_key else 'not configured — ACS factors and block population unavailable'}."
-    )
-    render_dark_table(pd.DataFrame(status_rows, columns=["Data layer", "Status", "Cached at"]))
-
-    section_header("", "Known Data Quality Considerations")
-    st.markdown(
-        "- **CDC PLACES uses modeled estimates**, not direct measurement. Values are derived from "
-        "BRFSS survey responses via small-area estimation. Tracts with fewer than ~1,000 residents "
-        "carry higher statistical uncertainty.\n"
-        "- **ACS 5-Year estimates carry margins of error.** The need index uses point estimates. "
-        "Tracts at the high-need boundary should be treated as approximate, not precise cutoffs.\n"
-        "- **OSM pharmacy data may be incomplete.** OpenStreetMap's Chicago coverage is high but "
-        "not exhaustive — independent or informal pharmacies are more likely to be missing than "
-        "chain pharmacies. Missing pharmacies bias the model toward over-estimating desert area.\n"
-        "- **Opportunity Zone designations are fixed at 2018.** The model uses the original "
-        "2017 TCJA list. No amendments or de-designations after 2018 are reflected.\n"
-        "- **Tract-level data**: both ACS and PLACES are published at census tract resolution. "
-        "Real within-tract variation is invisible to the model.\n"
-        "- **Area-based coverage by default**: population is assumed to be distributed evenly "
-        "across residential land. Enable *'Use real neighborhood population data'* to substitute "
-        "actual 2020 Census block population."
-    )
-
-    section_header("", "Limitations")
-    st.markdown(
-        "- **Drive network as proxy**: the full pedestrian network for Chicago exceeds available "
-        "RAM; the drive network respects real routing barriers (rivers, highways, rail) "
-        "but slightly over-estimates walkable access.\n"
-        "- **Static pharmacy set**: existing pharmacies come from the loaded data snapshot. "
-        "Pharmacy openings, closures, and hours are not reflected."
-    )
+    col_q1, col_q2 = st.columns(2)
+    with col_q1:
+        st.markdown(
+            "**Modelled estimates, not measurements**  \n"
+            "CDC PLACES disease prevalences are derived from BRFSS survey responses "
+            "via Bayesian small-area estimation. Tracts with fewer than ~1,000 residents "
+            "carry higher uncertainty — the point estimate is used, not the confidence interval.\n\n"
+            "**ACS margins of error**  \n"
+            "5-Year ACS estimates are based on pooled surveys, not complete counts. "
+            "The need index uses point estimates. Tracts near index boundaries should be "
+            "treated as approximate, not precise cutoffs.\n\n"
+            "**OSM pharmacy completeness**  \n"
+            "OpenStreetMap's Chicago coverage is high but not exhaustive. Independent "
+            "and informal pharmacies are more likely to be missing than chain pharmacies. "
+            "Undercounted pharmacies bias the model toward over-estimating desert extent."
+        )
+    with col_q2:
+        st.markdown(
+            "**Tract-level resolution**  \n"
+            "Both ACS and PLACES publish at census tract granularity (~4,000 residents). "
+            "Real within-tract variation is invisible — a tract scored as high-need "
+            "may have well-served pockets and severely underserved corners.\n\n"
+            "**Area-based density (default)**  \n"
+            "Without the Census block option, population is assumed uniformly distributed "
+            "across residential land within each tract. In reality, density varies. "
+            "Enable *'Use 2020 Census block population'* for population-weighted coverage.\n\n"
+            "**Static pharmacy and OZ snapshots**  \n"
+            "Existing pharmacies come from the data snapshot at load time — openings, "
+            "closures, and hours changes are not reflected. Opportunity Zone designations "
+            "are fixed at the 2017 TCJA list; no post-2018 amendments are reflected.\n\n"
+            "**Drive network as walk proxy**  \n"
+            "The full pedestrian network for Chicago exceeds available RAM. The drive "
+            "network respects real routing barriers (rivers, rail, highways) but slightly "
+            "over-estimates walkable distance in some areas."
+        )
