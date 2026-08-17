@@ -38,10 +38,6 @@ __pycache__/
 # at 0.5 mi radius.  Committed so the blue coverage layer appears instantly
 # without loading the 38 MB drive network on the first render.
 !.cache/chicago-illinois-usa/demo_new_sites_isochrone_r0.50.parquet
-# Per-candidate ego_graph isochrone lookup: candidate_id → polygon (168 KB).
-# Committed so Streamlit Cloud can union the correct shapes for any N ≤ 10
-# without loading the 38 MB graphml or running ego_graph at runtime.
-# Regenerate: scripts/precompute_candidate_isochrones.py
-!.cache/chicago-illinois-usa/candidate_isochrones_r0.50.parquet
-# Full drive network (38 MB) — only used locally for precompute scripts.
+# Chicago drive network (OSMnx, 38 MB).  Committed so Streamlit Cloud can
+# compute street-network isochrones for re-runs with different settings.
 !.cache/chicago-illinois-usa/drive_network.graphml
