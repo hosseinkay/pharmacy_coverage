@@ -591,6 +591,45 @@ st.markdown(
     /* ── Horizontal dividers ──────────────────────────────────────── */
     hr { border-color: var(--border) !important; margin: 1.5rem 0 !important; }
 
+    /* ── How-it-works step cards (hero intro) ────────────────────── */
+    .ph-hiw-grid {
+      display: grid !important;
+      grid-template-columns: repeat(3, 1fr) !important;
+      gap: 1rem !important;
+      margin: 0 0 2.5rem !important;
+    }
+    .ph-hiw-card {
+      background: var(--bg-e) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: var(--r) !important;
+      padding: 1.3rem 1.4rem !important;
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 0.5rem !important;
+    }
+    .ph-hiw-num {
+      font-family: var(--font-d) !important;
+      font-size: 0.68rem !important;
+      font-weight: 500 !important;
+      letter-spacing: 0.28em !important;
+      text-transform: uppercase !important;
+      color: var(--accent) !important;
+    }
+    .ph-hiw-title {
+      font-family: var(--font-d) !important;
+      font-size: 1.05rem !important;
+      font-weight: 500 !important;
+      color: var(--fg) !important;
+      line-height: 1.25 !important;
+    }
+    .ph-hiw-body {
+      font-family: var(--font-b) !important;
+      font-size: 0.85rem !important;
+      line-height: 1.65 !important;
+      color: var(--fg-m) !important;
+      margin: 0 !important;
+    }
+
     /* ── Stat burst (3-up context cards) ─────────────────────────── */
     .ph-stat-burst {
       display: grid !important;
@@ -917,17 +956,19 @@ if "bootstrapped" not in st.session_state:
 
     if _demo is not None:
         # ── Fast path (deployed demo) ────────────────────────────────────────
-        # Precomputed data in data/demo/ — no API calls, no optimization wait.
-        # PreparedCity is intentionally NOT stored: it's loaded lazily on the
-        # first "Adjust & re-run" click so startup stays instant.
-        st.session_state["result"]        = _demo.result
-        st.session_state["preview_layer"] = _demo.preview_layer
-        st.session_state["base_radius"]   = _demo.meta.get("base_radius", 0.5)
-        # prepared_key tells the controls section which strategy the demo used
-        # so it does NOT trigger a live prepare_city() on the default strategy.
-        st.session_state["prepared_key"]  = (CITY_KEY, "Balanced need (recommended)")
-        st.session_state["bootstrapped"]  = True
-        st.session_state["using_demo"]    = True
+        # Load the precomputed need map and pharmacy locations so section 01
+        # renders instantly.  "result" is intentionally NOT stored here —
+        # results only appear after the user clicks Run, keeping the opening
+        # view clean (map + intro, no pre-filled optimization output).
+        st.session_state["preview_layer"]  = _demo.preview_layer
+        st.session_state["map_center"]     = _demo.result.center
+        st.session_state["map_pharmacies"] = _demo.result.pharmacies
+        st.session_state["base_radius"]    = _demo.meta.get("base_radius", 0.5)
+        # prepared_key prevents a spurious prepare_city() call when the
+        # default strategy widget renders for the first time.
+        st.session_state["prepared_key"]   = (CITY_KEY, "Balanced need (recommended)")
+        st.session_state["bootstrapped"]   = True
+        st.session_state["using_demo"]     = True
     else:
         # ── Slow path (development / first-run before precompute script) ─────
         with st.status("Setting up Chicago Pharmacy Desert Planner…", expanded=True) as _boot:
@@ -937,27 +978,14 @@ if "bootstrapped" not in st.session_state:
             st.session_state["prepared_default"] = _boot_prepared
             st.session_state["prepared"]         = _boot_prepared
             st.session_state["prepared_key"]     = (CITY_KEY, "Balanced need (recommended)")
-
-            st.write("Running optimization with default settings (10 pharmacies, balanced need)…")
-            _boot_opt = OptConfig(
-                num_pharmacies=10,
-                min_distance_miles=0.5,
-                desert_radius_miles=0.5,
-                use_tiered_radius=False,
-                extended_radius_miles=0.5,
-                use_population_weighted_coverage=False,
-                restrict_to_opportunity_zones=False,
-            )
-            _boot_result = pipeline.run_optimization(
-                _boot_prepared, _boot_opt, CandidateConfig(grid_spacing_meters=200.0)
-            )
-            st.session_state["result"]       = _boot_result
-            st.session_state["base_radius"]  = 0.5
+            st.session_state["map_center"]       = _boot_prepared.bundle.center
+            st.session_state["map_pharmacies"]   = _boot_prepared.bundle.pharmacies
             st.write("Pre-computing need index map…")
             st.session_state["preview_layer"] = pipeline.get_preview_layer(_boot_prepared, 0.5)
+            st.session_state["base_radius"]   = 0.5
             st.session_state["bootstrapped"]  = True
             st.session_state["using_demo"]    = False
-            _boot.update(label="Ready — showing results below", state="complete")
+            _boot.update(label="Ready — map loaded below", state="complete")
 
 elif "prepared_default" not in st.session_state and st.session_state.get("prepared") is not None:
     st.session_state["prepared_default"] = st.session_state.get("prepared")
@@ -967,27 +995,44 @@ elif "prepared_default" not in st.session_state and st.session_state.get("prepar
 # ---------------------------------------------------------------------------
 st.markdown(
     """
-    <div style="padding: 0.5rem 0 1.5rem;">
+    <div style="padding: 0.5rem 0 1.25rem;">
       <span class="ph-eyebrow">Chicago &middot; Pharmacy Access Planning</span>
       <h1 class="ph-hero-title">Chicago Pharmacy<br>Desert Planner</h1>
       <p class="ph-hero-body">
         Pharmacy deserts are areas where getting to a pharmacy is difficult enough
         that routine access to prescriptions becomes a real problem.
         <strong>Chicago is one of the largest cities where that gap shows up clearly
-        across neighborhoods.</strong>
+        across neighborhoods.</strong> Here&rsquo;s how this tool approaches the question.
       </p>
-      <p class="ph-hero-body">
-        But how big is the problem, really? One way to start is by looking at every
-        pharmacy in Chicago and asking how much of the city falls within about a
-        10-minute walk along the street network. That gives a simple picture of where
-        pharmacy access is already strong — and where it starts to fall off.
-      </p>
-      <p class="ph-hero-body">
-        From there, the analysis brings in health and demographic data to better
-        understand <em>who</em> is affected and where limited access matters most —
-        then uses an optimization algorithm to identify the sites where new pharmacies
-        would do the most good.
-      </p>
+    </div>
+    <div class="ph-hiw-grid">
+      <div class="ph-hiw-card">
+        <span class="ph-hiw-num">Step 01</span>
+        <span class="ph-hiw-title">Map the baseline</span>
+        <p class="ph-hiw-body">
+          Start with every pharmacy in Chicago and measure how much of the city
+          falls within a ~10-minute walk. This reveals where access is already
+          strong &mdash; and where it starts to fall off.
+        </p>
+      </div>
+      <div class="ph-hiw-card">
+        <span class="ph-hiw-num">Step 02</span>
+        <span class="ph-hiw-title">Layer in health &amp; demographic data</span>
+        <p class="ph-hiw-body">
+          Bring in vehicle access, poverty rates, chronic disease burden, age,
+          and mobility data to understand <em>who</em> is affected &mdash; and
+          where limited access matters most.
+        </p>
+      </div>
+      <div class="ph-hiw-card">
+        <span class="ph-hiw-num">Step 03</span>
+        <span class="ph-hiw-title">Find the highest-impact sites</span>
+        <p class="ph-hiw-body">
+          Run a coverage optimization across thousands of candidate locations to
+          identify where new pharmacies would reach the most high-need residents
+          with the fewest new sites.
+        </p>
+      </div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -1005,23 +1050,21 @@ with st.container(border=True):
         "Teal dots show existing pharmacy locations."
     )
 
-    prepared_default = st.session_state.get("prepared_default")
-    if prepared_default is not None:
-        # Use cached preview layer — computed once during bootstrap, never on re-render
-        preview_layer = st.session_state.get("preview_layer")
-        if preview_layer is None:
-            with st.spinner("Computing need index…"):
-                preview_layer = pipeline.get_preview_layer(prepared_default, 0.5)
-                st.session_state["preview_layer"] = preview_layer
+    # Use map_center + map_pharmacies from session_state — works in both demo
+    # mode (populated from precomputed data) and live mode (from prepared city).
+    _map_center     = st.session_state.get("map_center")
+    _map_pharmacies = st.session_state.get("map_pharmacies")
+    _preview_layer  = st.session_state.get("preview_layer")
 
-        preview_layer = preview_layer.copy()
+    if _preview_layer is not None and _map_center is not None:
+        preview_layer = _preview_layer.copy()
         preview_layer["covered_display"] = preview_layer["is_covered"].map(yes_no)
         for _col, _fmt in [
             ("normalized_need",           lambda v: "—" if pd.isna(v) else f"{v:.0f} / 100"),
             ("nearest_pharmacy_miles",    fmt_miles),
             ("TotalPopulation",           fmt_int),
             ("no_vehicle_pct",            fmt_pct),
-            ("poverty_pct",              fmt_pct),
+            ("poverty_pct",               fmt_pct),
             ("age65_pct",                 fmt_pct),
             ("ambulatory_disability_pct", fmt_pct),
             ("chronic_burden_pct",        fmt_pct),
@@ -1032,12 +1075,12 @@ with st.container(border=True):
             )
         preview_layer["community_area_display"] = preview_layer["community_area"].fillna("Unknown")
 
-        tooltip_cols = [
+        _preview_tooltip_cols = [
             ("community_area_display",            "Community area:"),
             ("normalized_need_display",           "Need index (0–100):"),
             ("nearest_pharmacy_miles_display",    "Nearest pharmacy:"),
             ("covered_display",                   "Currently covered:"),
-            ("TotalPopulation_display",            "Population:"),
+            ("TotalPopulation_display",           "Population:"),
             ("no_vehicle_pct_display",            "No vehicle:"),
             ("poverty_pct_display",               "Poverty rate:"),
             ("age65_pct_display",                 "Age 65+:"),
@@ -1046,23 +1089,25 @@ with st.container(border=True):
             ("uninsured_pct_display",             "Uninsured:"),
         ]
 
-        m_preview = build_map(prepared_default.bundle.center, fit_to=preview_layer)
-        need_choropleth_layer(preview_layer, tooltip_cols).add_to(m_preview)
+        m_preview = build_map(_map_center, fit_to=preview_layer)
+        need_choropleth_layer(preview_layer, _preview_tooltip_cols).add_to(m_preview)
         NEED_COLORMAP.caption = "Pharmacy Need Index (0–100)"
         NEED_COLORMAP.add_to(m_preview)
 
-        # Single GeoJson layer for all pharmacy dots — far faster than 850 individual markers
-        pharmacies_4326 = prepared_default.bundle.pharmacies.to_crs("EPSG:4326")
-        folium.GeoJson(
-            pharmacies_4326[["geometry"]].__geo_interface__,
-            marker=folium.CircleMarker(
-                radius=2, color="#4fa89a", fill=True, fill_color="#4fa89a", fill_opacity=0.55,
-            ),
-            tooltip=folium.Tooltip("Existing pharmacy"),
-        ).add_to(m_preview)
+        if _map_pharmacies is not None:
+            pharmacies_4326 = _map_pharmacies.to_crs("EPSG:4326")
+            folium.GeoJson(
+                pharmacies_4326[["geometry"]].__geo_interface__,
+                marker=folium.CircleMarker(
+                    radius=2, color="#4fa89a", fill=True, fill_color="#4fa89a", fill_opacity=0.55,
+                ),
+                tooltip=folium.Tooltip("Existing pharmacy"),
+            ).add_to(m_preview)
 
         st_folium(m_preview, height=500, use_container_width=True, returned_objects=[])
         st.caption("Teal dots = ~850 existing pharmacies. Hover any tract for details.")
+    else:
+        st.info("Map loading — if this persists, reload the page.", icon="🗺️")
 
 # Stat burst — three context numbers after the map (not before)
 st.markdown(
@@ -1224,6 +1269,9 @@ if run_clicked:
             st.session_state["prepared_default"] = _lazy_prepared
             st.session_state["prepared_key"]     = (CITY_KEY, strategy)
             st.session_state["using_demo"]       = False
+            # Update map layers so section 01 uses the live-pipeline pharmacy data
+            st.session_state["map_center"]       = _lazy_prepared.bundle.center
+            st.session_state["map_pharmacies"]   = _lazy_prepared.bundle.pharmacies
             prepared = _lazy_prepared
 
         st.write(f"Generating candidate sites from OpenStreetMap land use (every {int(grid_spacing)} m)…")
@@ -1346,6 +1394,23 @@ with _results_slot.container():
         tract_res["newly_covered_display"] = _newly_cov.map(
             lambda v: "—" if pd.isna(v) else f"{v:,.0f}"
         )
+
+        # tooltip_cols for the results-section need-choropleth — defined here
+        # (not inherited from section 01) so it's always in scope when results
+        # render, regardless of whether the preview map section ran.
+        tooltip_cols = [
+            ("community_area_display",            "Community area:"),
+            ("normalized_need_display",           "Need index (0–100):"),
+            ("nearest_pharmacy_miles_display",    "Nearest pharmacy:"),
+            ("covered_display",                   "Currently covered:"),
+            ("TotalPopulation_display",           "Population:"),
+            ("no_vehicle_pct_display",            "No vehicle:"),
+            ("poverty_pct_display",               "Poverty rate:"),
+            ("age65_pct_display",                 "Age 65+:"),
+            ("ambulatory_disability_pct_display", "Mobility difficulty:"),
+            ("chronic_burden_pct_display",        "Diabetes / hypertension:"),
+            ("uninsured_pct_display",             "Uninsured:"),
+        ]
 
         # Compute coverage shapes once (disk-cached after first run)
         with st.spinner("Computing coverage areas…"):
