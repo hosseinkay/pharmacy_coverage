@@ -1186,25 +1186,23 @@ st.markdown(
       <div class="ph-stat-card">
         <span class="ph-stat-number">~850</span>
         <span class="ph-stat-label">
-          pharmacies serve Chicago's 2.7&nbsp;million residents, but access
-          clusters in wealthier neighborhoods, leaving South &amp; West Sides
-          significantly underserved.
+          <strong>pharmacies</strong> serve Chicago's 2.7&nbsp;million residents,
+          but they are not distributed evenly across the city.
         </span>
       </div>
       <div class="ph-stat-card">
         <span class="ph-stat-number">40%+</span>
         <span class="ph-stat-label">
-          of households in the most pharmacy-poor tracts lack vehicle access,
-          making a pharmacy more than 0.5&nbsp;miles away effectively unreachable
-          for routine prescriptions.
+          <strong>without a vehicle</strong> in some of the lowest-access tracts,
+          making nearby pharmacy access much more important for routine prescriptions.
         </span>
       </div>
       <div class="ph-stat-card">
         <span class="ph-stat-number">6</span>
         <span class="ph-stat-label">
-          data dimensions combined into the Pharmacy Need Index: vehicle access,
-          poverty, chronic disease burden, age 65+, mobility, and uninsured rate.
-          Each is percentile-ranked across all 801&nbsp;Chicago tracts.
+          <strong>need factors</strong> combine Census and CDC data on vehicle access,
+          poverty, chronic medication burden, age, mobility, and insurance status to
+          show where limited access may matter most.
         </span>
       </div>
     </div>
