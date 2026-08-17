@@ -758,10 +758,41 @@ def add_filled_geometry(m, geom_4326, color, opacity, tooltip):
     folium.GeoJson(
         {"type": "Feature", "geometry": geom_4326.__geo_interface__, "properties": {}},
         style_function=lambda _f, c=color, o=opacity: {
-            "fillColor": c, "color": c, "weight": 2.0, "fillOpacity": o,
+            "fillColor": c, "color": c, "weight": 1.5, "fillOpacity": o,
         },
         tooltip=folium.Tooltip(tooltip),
     ).add_to(m)
+
+
+def _coverage_shape_for_display(
+    pharmacies: gpd.GeoDataFrame,
+    radius_miles: float,
+) -> "shapely.geometry.base.BaseGeometry | None":
+    """Union of pharmacy coverage areas, simplified for Leaflet rendering.
+
+    Uses resolution=4 (octagonal circles) rather than Shapely's default 16
+    so the union polygon has ~4× fewer vertices — critical when unioning 800+
+    pharmacy circles.  A 50-metre simplify pass further reduces noise.  Both
+    steps are purely cosmetic; the underlying scoring math is unaffected.
+
+    Returns a Shapely geometry in EPSG:4326, or None on any error.
+    """
+    if pharmacies is None or pharmacies.empty:
+        return None
+    try:
+        pharm_3857 = pharmacies.to_crs("EPSG:3857")
+        circles = pharm_3857.geometry.buffer(
+            radius_miles * cov_mod.METERS_PER_MILE, resolution=4
+        )
+        union_3857 = circles.union_all()
+        if union_3857 is None or union_3857.is_empty:
+            return None
+        # 50-metre simplify in projected space keeps shape faithful while
+        # cutting vertex count by another 50-70 %.
+        simplified = union_3857.simplify(50)
+        return gpd.GeoSeries([simplified], crs="EPSG:3857").to_crs("EPSG:4326").iloc[0]
+    except Exception:
+        return None
 
 
 def numbered_icon(rank) -> folium.DivIcon:
@@ -890,6 +921,12 @@ def _network_cache_available(radius_miles: float) -> tuple[bool, bool]:
 
 
 def get_existing_coverage_shape(pharmacies: gpd.GeoDataFrame, radius_miles: float):
+    """Return (geom_4326, status_label) for the union of existing pharmacy coverage.
+
+    Result is cached in session_state so it is computed at most once per run.
+    Uses _coverage_shape_for_display (resolution=4 + 50 m simplify) to keep
+    the GeoJSON payload small enough for Leaflet to render without issues.
+    """
     cache_store = st.session_state.setdefault("existing_coverage_cache", {})
     key = round(radius_miles, 4)
     if key in cache_store:
@@ -898,20 +935,17 @@ def get_existing_coverage_shape(pharmacies: gpd.GeoDataFrame, radius_miles: floa
     iso_cached, graph_cached = _network_cache_available(radius_miles)
 
     if iso_cached or graph_cached:
-        # Network data is on disk — use it (fast path: loads from parquet or graphml)
         try:
             place_name = get_osm_place_name(CITY_KEY)
-            geom = isochrones.get_merged_existing_isochrone_cached(place_name, pharmacies, radius_miles)
+            geom = isochrones.get_merged_existing_isochrone_cached(
+                place_name, pharmacies, radius_miles
+            )
             status = "Street-network isochrone"
         except Exception:
-            # Corrupted cache or unexpected error — fall back gracefully
-            geom = to_wgs84(cov_mod.merged_buffer(pharmacies, radius_miles))
+            geom = _coverage_shape_for_display(pharmacies, radius_miles)
             status = "Straight-line buffer"
     else:
-        # No cached network on disk — use straight-line buffer immediately.
-        # Downloading the full drive network from OSM is too slow and
-        # memory-intensive for Streamlit Cloud cold starts.
-        geom = to_wgs84(cov_mod.merged_buffer(pharmacies, radius_miles))
+        geom = _coverage_shape_for_display(pharmacies, radius_miles)
         status = "Straight-line buffer"
 
     cache_store[key] = (geom, status)
@@ -919,6 +953,7 @@ def get_existing_coverage_shape(pharmacies: gpd.GeoDataFrame, radius_miles: floa
 
 
 def get_new_coverage_shape(selected_4326: gpd.GeoDataFrame, radius_miles: float):
+    """Return (geom_4326, status_label) for the union of newly-selected site coverage."""
     if selected_4326.empty:
         return None, ""
 
@@ -931,10 +966,9 @@ def get_new_coverage_shape(selected_4326: gpd.GeoDataFrame, radius_miles: float)
             geom = isochrones.compute_merged_isochrone(graph, selected_4326, radius_miles)
             return geom, "Street-network isochrone"
         except Exception:
-            pass  # fall through to buffer fallback
+            pass
 
-    geom_3857 = cov_mod.merged_buffer(selected_4326, radius_miles)
-    return to_wgs84(geom_3857), "Straight-line buffer"
+    return _coverage_shape_for_display(selected_4326, radius_miles), "Straight-line buffer"
 
 
 # ---------------------------------------------------------------------------
@@ -1076,16 +1110,29 @@ with st.container(border=True):
 
         if _map_pharmacies is not None:
             pharmacies_4326 = _map_pharmacies.to_crs("EPSG:4326")
+            _base_r = st.session_state.get("base_radius", 0.5)
+            # Coverage shape — added before dots so dots sit on top
+            _prev_cov = _coverage_shape_for_display(pharmacies_4326, _base_r)
+            add_filled_geometry(
+                m_preview, _prev_cov,
+                color="#4fa89a", opacity=0.25,
+                tooltip=f"Existing pharmacy coverage (~{walk_minutes(_base_r)}-min walk)",
+            )
+            # Pharmacy dots
             folium.GeoJson(
                 pharmacies_4326[["geometry"]].__geo_interface__,
                 marker=folium.CircleMarker(
-                    radius=2, color="#4fa89a", fill=True, fill_color="#4fa89a", fill_opacity=0.55,
+                    radius=2, color="#4fa89a", fill=True, fill_color="#4fa89a", fill_opacity=0.85,
                 ),
                 tooltip=folium.Tooltip("Existing pharmacy"),
             ).add_to(m_preview)
 
         st_folium(m_preview, height=500, use_container_width=True, returned_objects=[], key="map_section01")
-        st.caption("Teal dots = ~850 existing pharmacies. Hover any tract for details.")
+        _walk = walk_minutes(st.session_state.get("base_radius", 0.5))
+        st.caption(
+            f"Teal shading = area within ~{_walk} min walk of an existing pharmacy. "
+            "Gaps are pharmacy deserts. Hover any tract for details."
+        )
     else:
         st.info("Map loading — if this persists, reload the page.", icon="🗺️")
 
