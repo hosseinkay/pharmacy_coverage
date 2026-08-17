@@ -919,22 +919,43 @@ def get_existing_coverage_shape(pharmacies: gpd.GeoDataFrame, radius_miles: floa
 
 
 def get_new_coverage_shape(selected_4326: gpd.GeoDataFrame, radius_miles: float):
+    """Return merged street-network isochrone for the selected candidate sites.
+
+    Uses the same graph + edge-buffering method as the existing-pharmacy
+    isochrone so both layers are visually consistent.  The network graph is
+    loaded once per session (session_state cache) so the 38 MB graphml isn't
+    re-parsed on every Streamlit re-render.
+    """
     if selected_4326.empty:
         return None, ""
+
+    # --- session-level cache keyed by (frozenset of candidate indices, radius) ---
+    cache_store = st.session_state.setdefault("new_coverage_cache", {})
+    cache_key = (frozenset(selected_4326.index.tolist()), round(radius_miles, 4))
+    if cache_key in cache_store:
+        return cache_store[cache_key]
 
     _, graph_cached = _network_cache_available(radius_miles)
 
     if graph_cached:
         try:
             place_name = get_osm_place_name(CITY_KEY)
-            graph = isochrones.get_network_graph_cached(place_name)
+            # get_network_graph_cached loads from disk; cache the object itself
+            # in session_state so subsequent renders skip the 38 MB parse.
+            if "osm_graph" not in st.session_state:
+                st.session_state["osm_graph"] = isochrones.get_network_graph_cached(place_name)
+            graph = st.session_state["osm_graph"]
             geom = isochrones.compute_merged_isochrone(graph, selected_4326, radius_miles)
-            return geom, "Street-network isochrone"
+            result = (geom, "Street-network isochrone")
+            cache_store[cache_key] = result
+            return result
         except Exception:
             pass  # fall through to buffer fallback
 
     geom_3857 = cov_mod.merged_buffer(selected_4326, radius_miles)
-    return to_wgs84(geom_3857), "Straight-line buffer"
+    result = (to_wgs84(geom_3857), "Straight-line buffer")
+    cache_store[cache_key] = result
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1399,23 +1420,11 @@ with _results_slot.container():
             )
             new_shape, new_status = get_new_coverage_shape(selected, _result_radius)
 
-        # Compute new-only shape (difference of new union minus existing).
-        # Falls back to the full new_shape if the difference is empty (can happen
-        # when all selected sites are geometrically inside the existing coverage
-        # zone, which means the optimizer found high-need areas that happen to be
-        # near an existing pharmacy — still worth showing).
-        new_only = None
-        if new_shape is not None:
-            if existing_shape is not None:
-                try:
-                    ns3 = gpd.GeoSeries([new_shape], crs="EPSG:4326").to_crs(cov_mod.PROJECTED_CRS).iloc[0]
-                    es3 = gpd.GeoSeries([existing_shape], crs="EPSG:4326").to_crs(cov_mod.PROJECTED_CRS).iloc[0]
-                    diff = ns3.difference(es3)
-                    new_only = to_wgs84(diff) if not diff.is_empty else new_shape
-                except Exception:
-                    new_only = new_shape
-            else:
-                new_only = new_shape
+        # Blue layer = street-network isochrone for selected new sites.
+        # Shown at full extent (no difference subtraction) so the coverage
+        # corridor of each recommended site is clearly visible, even where it
+        # overlaps the existing green layer.
+        new_only = new_shape  # None when selected is empty
 
         def _add_selected_markers(folium_map) -> None:
             for _, row in selected.iterrows():

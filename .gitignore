@@ -31,8 +31,10 @@ __pycache__/
 !.cache/chicago-illinois-usa/
 .cache/chicago-illinois-usa/*
 !.cache/chicago-illinois-usa/zoned_land.parquet
-# Pre-computed street-network isochrone for existing pharmacies at the
-# default walkability radius (0.5 mi ≈ 10 min walk).  Committed so
-# Streamlit Cloud can render the coverage shape without downloading the
-# 38 MB drive network from OSM.
+# Pre-computed street-network isochrone for existing pharmacies (read-only,
+# generated once — regenerate with scripts/precompute_isochrone.py).
 !.cache/chicago-illinois-usa/existing_isochrone_r0.50.parquet
+# Chicago drive network (OSMnx, 38 MB).  Committed so Streamlit Cloud can
+# compute street-network isochrones for newly selected candidate sites at
+# runtime without an outbound OSM download on every deploy.
+!.cache/chicago-illinois-usa/drive_network.graphml
